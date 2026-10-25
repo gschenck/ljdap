@@ -46,16 +46,16 @@ jobs:
           name: luajit-exe
           path: bin
       - name: Wine installieren
-        run: sudo apt-get update && sudo apt-get install -y wine64
+        run: sudo apt-get update && sudo apt-get install -y wine64 wine
       - name: Unit-Tests unter Wine
         env:
           WINEDEBUG: -all
         run: |
-          for t in tests/unit/*_test.lua; do wine64 bin/luajit.exe "$t" || exit 1; done
+          for t in tests/unit/*_test.lua; do wine bin/luajit.exe "$t" || exit 1; done
       - name: Szenarien unter Wine
         env:
           WINEDEBUG: -all
-          LJDAP_INTERPS: wine64 bin/luajit.exe
+          LJDAP_INTERPS: wine bin/luajit.exe
         run: python3 -m unittest discover -s tests/scenarios -v
 
   windows:
