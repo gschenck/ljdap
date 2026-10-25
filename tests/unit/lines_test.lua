@@ -43,7 +43,9 @@ case("Datei", function()
 end)
 
 case("Shebang, BOM und Syntaxfehler", function()
-  local tmp = os.tmpname()
+  -- nicht os.tmpname(): unter Windows/Wine liegt der Name im Laufwerks-
+  -- wurzelverzeichnis (\\sXXX.), dort darf ein normaler Benutzer nicht schreiben
+  local tmp = "tests/unit/_tmp_lines.lua"
   local f = assert(io.open(tmp, "wb"))
   f:write("\239\187\191#!/usr/bin/env luajit\nlocal x = 1\nreturn x\n")
   f:close()

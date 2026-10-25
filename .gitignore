@@ -4,3 +4,4 @@ __pycache__/
 *.pyc
 /build/
 /tmp/
+tests/unit/_tmp_*
