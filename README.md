@@ -7,9 +7,12 @@ einem beliebigen DAP-Client (Sublime Text mit Paket „Debugger“, VS Code).
 *A pure-Lua Debug Adapter Protocol server for LuaJIT 2.1 / Lua 5.1, loaded
 into the debuggee. No Node, no C module, no LuaSocket required.*
 
-> **Stand: M1 (0.1.0-dev).** Verbindung, Initialisierung, Anhängen und
-> Trennen funktionieren unter Linux und Windows. Haltepunkte, Stepping und
-> Variablen folgen mit M2. Plan: [docs/KONZEPT.md](docs/KONZEPT.md).
+> **Stand: M2 (0.1.0-dev).** Haltepunkte (mit Verschiebung von Kommentar-
+> und Leerzeilen), Step over/in/out, Stack, Locals/Upvalues/Varargs/Globals
+> mit aufklappbaren Tabellen, `ljdap.breakhere()`, `stopOnEntry`,
+> `pathMappings`; Linux und Windows. Coroutinen, `evaluate`, bedingte
+> Haltepunkte, Logpoints, Fehler-Halt und Pause folgen mit M3.
+> Plan: [docs/KONZEPT.md](docs/KONZEPT.md).
 
 ## Einbindung
 
@@ -64,26 +67,64 @@ Interpreter-Code ausführt. Für Programme mit Hauptschleife (TUI, GUI):
 
 Unter Lua 5.1 gibt es diese Einschränkung nicht.
 
-## Einrichtung der Editoren (geplant)
+## Sublime Text (Paket „Debugger“)
 
-- **Sublime Text:** kleines Zusatzpaket aus `editors/sublime/` nach
-  `Packages/ljdap/` kopieren; Konfiguration `"type": "ljdap"` mit
-  `"request": "attach"`, `host`, `port`.
-- **VS Code:** Erweiterung aus `editors/vscode/`; launch.json mit
-  `"type": "ljdap"`.
+1. Paket **Debugger** (daveleroy) über Package Control installieren
+   (Sublime Text ≥ Build 4199).
+2. Den Ordner `editors/sublime/` als `Packages/ljdap/` kopieren
+   (*Preferences → Browse Packages…*). Die Datei `.python-version` gehört
+   dazu: das Debugger-Paket läuft im Python-3.8-Plugin-Host.
+3. Im `.sublime-project` eine Konfiguration anlegen (Vorlage:
+   `editors/sublime/ljdap.sublime-project.example`, oder *Debugger: Add
+   Configuration* → *ljdap*):
+
+```json
+"debugger_configurations": [
+  { "name": "ljdap", "type": "ljdap", "request": "attach",
+    "host": "127.0.0.1", "port": 4711 }
+]
+```
+
+4. Programm starten, z. B. `LJDAP="port=4711,wait=1" luajit -l ljdap skript.lua`
+   (Windows: `set LJDAP=port=4711,wait=1`), dann in Sublime *Debugger: Start*.
+
+Weitere `attach`-Felder: `stopOnEntry` (mit `wait=1` an der ersten Zeile
+anhalten), `pathMappings` (`[{ "localRoot": "C:\\Projekte\\x", "remoteRoot": "/home/gs/x" }]`,
+wenn Programm und Editor verschiedene Pfade sehen), `timeout`.
+
+## VS Code (geplant)
+
+Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
 
 ## Grenzen
 
+- **Geschwindigkeit:** Ohne Haltepunkte kostet ein verbundener Client kaum
+  etwas (≈ 1,0–1,5× gegenüber `-joff`). Sobald irgendwo ein Haltepunkt
+  gesetzt ist oder gesteppt wird, läuft ein Zeilen-Hook: gemessen ≈ 9–10×
+  (Lua 5.1) bzw. ≈ 13–20× (LuaJIT-Interpreter) für aufrufintensiven Code
+  (`python3 tests/perf/bench.py`). Rechenlastige Programme: Haltepunkte
+  gezielt setzen und wieder entfernen.
+- **Tail Calls** (`return f(x)`): LuaJIT ersetzt den Rahmen, „Step over“
+  auf so einer Zeile hält in `f`; Lua 5.1 zeigt einen Rahmen „(tail call)“
+  und hält in der aufrufenden Funktion.
+- Arbeitsverzeichnis: Relative Quellpfade werden mit dem Verzeichnis beim
+  Start von ljdap aufgelöst. Wechselt das Programm danach das Verzeichnis
+  und lädt relativ, passen die Pfade nicht.
+- Stand M2: Haltepunkte und Stepping nur in der Haupt-Coroutine; Bedingungen
+  und Logpoints werden noch ignoriert (Haltepunkt hält immer).
 - Kein Lua 5.2–5.4, keine echten OS-Threads (eigene `lua_State`).
 - stdio-Transport nur blockierend und nur für Programme, die stdin/stdout
   nicht selbst nutzen; Pause im laufenden Programm ist damit nicht möglich.
-- Ein Halt in einem FFI-Callback blockiert den C-Aufrufer (ab M2).
+- Ein Halt in einem FFI-Callback blockiert den C-Aufrufer (SDL/ImGui meist harmlos).
 
 ## Entwicklung
 
 - Module in `src/ljdap/`; Ein-Datei-Release `ljdap.lua` (M4) wird von
   `tools/amalgamate.lua` erzeugt.
 - Unit-Tests: `sh tests/run.sh` (luajit und lua5.1).
+- Sublime-Plugin: `python3 -m unittest discover -s tests/editors -v`
+  (mit `SUBLIME_DEBUGGER_SRC=<Klon von SublimeDebugger>` zusätzlich Prüfung
+  der genutzten internen API).
 - Szenarien mit echtem DAP-Client: `python3 -m unittest discover -s tests/scenarios -v`;
   andere Interpreter über `LJDAP_INTERPS="luajit;lua5.1;wine /pfad/luajit.exe"`.
 - CI: Linux (luajit, lua5.1), Windows-LuaJIT (MinGW) unter Wine und auf

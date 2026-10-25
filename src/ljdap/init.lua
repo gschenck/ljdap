@@ -26,10 +26,12 @@ local M = {
   state = session.state,
 }
 
---- Programmatischer Haltepunkt; ohne Client wirkungslos. (Halt ab M2.)
+--- Programmatischer Haltepunkt; ohne verbundenen Client wirkungslos.
+-- Liefert true, wenn angehalten wurde.
 function M.breakhere()
-  session.poll()
-  return false
+  -- kein Tail Call: der Rahmen dieser Funktion dient als Markierung
+  local stopped = session.breakhere(M.breakhere)
+  return stopped
 end
 
 -- Geladen über `luajit -l ljdap`? Dann ruft C (lua.c/luajit.c) require auf:

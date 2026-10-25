@@ -1,6 +1,6 @@
 # ljdap – Konzept
 
-Stand 2026-10-25 (M0 abgenommen, fortgeschrieben für M1, siehe 15). Ein DAP-Server (Debug Adapter Protocol) in reinem Lua für
+Stand 2026-10-25 (fortgeschrieben bis M2, siehe 15). Ein DAP-Server (Debug Adapter Protocol) in reinem Lua für
 LuaJIT, der in das zu untersuchende Programm geladen wird. Bedienoberfläche
 ist ein beliebiger DAP-Client: Sublime Text (Paket „Debugger“), VS Code,
 später ein F7Cmdr-Frontend.
@@ -114,14 +114,31 @@ Regel: Entwicklung in `src/`, das eingecheckte `ljdap.lua` wird nur durch
   Client mit Haltepunkten oder Stepping `jit.off()`; nach Trennen wieder
   `jit.on()` (Annahme: `jit.flush()` nötig, prüfen). Im README benennen:
   Zeitverhalten unter dem Debugger ist anders.
-- **Selektiver Zeilen-Hook:** Grundzustand nur Call/Return-Hook. Beim Eintritt
-  in eine Funktion, deren `source` einen Haltepunkt hat (Tabelle
-  normalisierter Quellen → Zeilenmengen), Zeilen-Hook für diese Ebene an;
-  bei Return Zustand der Aufrufer-Ebene wiederherstellen. Beim Steppen
-  Zeilen-Hook global an.
+- ~~**Selektiver Zeilen-Hook:** Grundzustand nur Call/Return-Hook …~~
+  **Umgesetzt (M2, nach Messung):** Zeilen-Hook nur, wenn irgendwo ein
+  Haltepunkt gesetzt ist oder gesteppt wird; sonst nur der Count-Hook.
+  Im Hook ein Vorfilter ohne `getinfo`: Tabelle „Zeilennummer → Anzahl
+  Haltepunkte über alle Dateien“, erst bei Treffer Quelle vergleichen.
+  Messung (3 Mio. Aufrufe, Interpreter): leerer Lua-Hook „l“ 4–7×, „c“
+  2–2,5×, „cr“ 3,6×; Call-Hook mit Quellprüfung je Aufruf 20×, mit
+  Zwischenspeicher je Funktion 9–15×; schlanker Zeilen-Hook mit Vorfilter
+  6× (Lua 5.1) bzw. 14× (LuaJIT). Der selektive Ansatz ist also nicht
+  schneller, weil schon jeder Call/Return-Hook-Aufruf zählt. Gesamt mit
+  ljdap und einem Haltepunkt in anderer Datei: ≈ 9–10× (Lua 5.1),
+  ≈ 13–20× (LuaJIT, ohnehin ohne JIT); ohne Haltepunkt ≈ 1,0–1,5×
+  (`tests/perf/bench.py`).
 - **Step-Logik:** Stack-Tiefe zum Zeitpunkt des Befehls merken; over = halten
   bei Tiefe ≤ Start, in = nächste Zeile beliebig, out = Tiefe < Start. Tail
   calls (LuaJIT „tail return“) berücksichtigen.
+  **Gemessen (M2):** Bei `return g(x)` ersetzt LuaJIT den Rahmen (Tiefe
+  gleich, `getinfo` meldet den alten Namen) → „Step over“ hält in `g`.
+  Lua 5.1 legt einen Pseudorahmen „(tail call)“ an (Tiefe + 1) → „Step
+  over“ hält im Aufrufer. Beides bleibt so, steht im README. Nach einem
+  Rücksprung meldet Lua die Aufrufzeile nicht erneut; gehalten wird an der
+  nächsten neuen Zeile.
+- **Agentencode beim Steppen überspringen:** Quellen unter dem Verzeichnis
+  von `ljdap/` (mit vereinheitlichten Trennern; `require` erzeugt unter
+  Windows gemischte Trenner).
 - **Pause und Socket-Abfrage:** Count-Hook alle N Anweisungen (z. B. 10 000,
   einstellbar) prüft nicht blockierend den Socket. Pause setzt
   „bei nächster Zeile halten“. Zu prüfen: Count-Hook unter JIT (läuft nicht
@@ -146,6 +163,10 @@ Regel: Entwicklung in `src/`, das eingecheckte `ljdap.lua` wird nur durch
 - **Haltschleife:** Im Hook blockierend auf Requests warten (stackTrace,
   variables, evaluate, continue …), danach zurückkehren. Agentenframes aus
   dem Stack ausblenden (Ebenen-Offset ermitteln, nicht hart codieren).
+  **Umgesetzt (M2):** Jeder Halt merkt sich eine Markierungsfunktion (den
+  Hook bzw. `ljdap.breakhere`); Frame 0 ist der Rahmen direkt darüber, die
+  Ebene wird bei jeder Anfrage per `getinfo(l, "f")` neu gesucht. Wichtig:
+  kein Tail Call auf dem Weg zur Markierung (`breakhere`).
 - **Wiedereintritt:** Sperre gegen Hook-Rekursion (Agent ruft Lua-Code, z. B.
   `__tostring`, `__index` bei der Anzeige); Fehler im Agenten abfangen und
   als `output`-Event melden, nie das Programm abbrechen.
@@ -177,6 +198,12 @@ ExceptionInfoRequest (optional).
 Haltepunkt-Verifikation: Zeilen ohne Code (Kommentar, Leerzeile) auf nächste
 gültige Zeile schieben, sobald die Funktion geladen ist
 (`debug.getinfo(f, "L").activelines`); bis dahin „unverified“.
+**Umgesetzt (M2), besser als geplant:** ljdap übersetzt die Datei beim
+`setBreakpoints` (ohne Ausführung) und liest die gültigen Zeilen aller
+Funktionen, auch noch nicht aufgerufener: LuaJIT über `jit.util.funcinfo`
+/`funck` (Kind-Prototypen), Lua 5.1 durch Lesen von `string.dump`. Damit
+sind Haltepunkte sofort verified und verschoben (max. 30 Zeilen). Datei
+nicht lesbar → unverified, Haltepunkt bleibt an der gewünschten Zeile.
 ljdap prüft Haltepunkte selbst und verlangt kein `sourceContent` (das ist
 eine Eigenheit von actboy168/lua-debug, kein DAP-Standard).
 
@@ -219,7 +246,12 @@ Platzhalter `json.null`, damit die Indizes stimmen.
   host/port/sourceRoot) + rund 20 Zeilen `extension.js` mit
   `DebugAdapterDescriptorFactory` → `new DebugAdapterServer(port, host)`.
   Als `.vsix` paketierbar, ohne Node-Laufzeit beim Anwender.
-- **Sublime Text (Paket Debugger):** geklärt (siehe 15.1): **kein**
+- **Sublime Text (Paket Debugger):** umgesetzt in M2
+  (`editors/sublime/ljdap_adapter.py`). Registrierung erst in
+  `plugin_loaded()`, weil das Debugger-Paket beim (Neu-)Laden seine
+  Untermodule aus `sys.modules` löscht. Test mit nachgebildetem Paket und
+  Prüfung der internen API am echten Quelltext in der CI
+  (`tests/editors/test_sublime.py`). Geklärt (siehe 15.1): **kein**
   generischer TCP-Adapter per Konfiguration. Kleines Plugin in
   `editors/sublime/` (eine Python-Datei, rund 30 Zeilen): Klasse
   `class Ljdap(dap.Adapter)` mit `type = 'ljdap'`, `start()` gibt
@@ -246,7 +278,8 @@ Platzhalter `json.null`, damit die Indizes stimmen.
 - Windows: luajit.exe (MinGW) unter Wine, gleiche Szenarien.
 - Leistung: Messskript, Laufzeit ohne Client / mit Client ohne Haltepunkt /
   mit Haltepunkt in anderer Datei; Ziel (Annahme) ≤ 1,2× bzw. ≤ 3×
-  gegenüber `jit.off()`-Lauf.
+  gegenüber `jit.off()`-Lauf. **Gemessen M2:** ≈ 1,0–1,5× bzw. ≈ 9–20×
+  (siehe 6); das zweite Ziel ist nicht erreichbar.
 - CI: GitHub Actions (öffentliches Repo → kein Token-Problem). Windows
   zusätzlich zum Wine-Lauf auf einem echten Windows-Runner (für öffentliche
   Repos kostenlos); luajit.exe wird in der CI mit MinGW aus einem
@@ -274,7 +307,12 @@ Platzhalter `json.null`, damit die Indizes stimmen.
 - VS Code: `debugServer` ohne eigene Erweiterung nicht nutzbar (Annahme, M1).
 - ~~Sandbox ohne Wine und MinGW~~ – in M1 installiert, Szenarien laufen
   unter Wine.
-- Count-Hook/Pause unter JIT ohne verbundenen Client (6).
+- Count-Hook/Pause unter JIT ohne verbundenen Client (6) – gemessen M1,
+  gelöst über JIT aus bei Client bzw. `ljdap.poll()`.
+- Geschwindigkeit mit aktiven Haltepunkten (6, 11): Ziel ≤ 3× war eine
+  Annahme und ist in reinem Lua nicht erreichbar (gemessen 9–20×). Eine
+  Verbesserung ohne C-Code ist nicht bekannt; der eigene `lua_State`
+  (s. u.) ändert an den Hook-Kosten nichts.
 - `jit.off()`/`jit.on()` mitten im Lauf: Verhalten bereits kompilierter
   Traces (flush nötig?).
 - Stack-Ebenen-Offset im Hook zwischen LuaJIT und PUC 5.1 unterschiedlich.

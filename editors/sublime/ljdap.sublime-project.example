@@ -1,0 +1,24 @@
+{
+	// Beispiel: in das eigene .sublime-project übernehmen
+	"folders": [{ "path": "." }],
+	"debugger_configurations": [
+		{
+			"name": "ljdap: anhängen",
+			"type": "ljdap",
+			"request": "attach",
+			"host": "127.0.0.1",
+			"port": 4711
+		},
+		{
+			// Programm läuft auf einem Server, Editor unter Windows
+			"name": "ljdap: zeus",
+			"type": "ljdap",
+			"request": "attach",
+			"host": "127.0.0.1",
+			"port": 4711,
+			"pathMappings": [
+				{ "localRoot": "C:\\Projekte\\femconn", "remoteRoot": "/home/gs/femconn" }
+			]
+		}
+	]
+}

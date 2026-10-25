@@ -20,6 +20,10 @@ jobs:
         run: sh tests/run.sh luajit lua5.1
       - name: Szenarien (luajit, lua5.1)
         run: python3 -m unittest discover -s tests/scenarios -v
+      - name: Sublime-Plugin (inkl. API-Prüfung gegen aktuelles Debugger-Paket)
+        run: |
+          git clone -q --depth 1 https://github.com/daveleroy/SublimeDebugger.git /tmp/SublimeDebugger
+          SUBLIME_DEBUGGER_SRC=/tmp/SublimeDebugger python3 -m unittest discover -s tests/editors -v
 
   luajit-exe:
     runs-on: ubuntu-24.04

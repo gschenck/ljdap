@@ -15,45 +15,12 @@ import sys
 import time
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from dap_client import DapClient, DapError, free_port  # noqa: E402
-
-ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-INTERPS = [s.strip() for s in os.environ.get("LJDAP_INTERPS", "luajit;lua5.1").split(";") if s.strip()]
-DEV_PATH = "package.path='src/?.lua;src/?/init.lua;'..package.path"
-DEBUG = os.environ.get("LJDAP_TEST_LOG")
+sys.path.insert(0, os.path.dirname(__file__))
+from harness import (ROOT, INTERPS, DEV_PATH, Program, attach_args,  # noqa: E402
+                     DapError)
 
 
-class Program:
-    """Startet ein Fixture mit -l ljdap und den Optionen in LJDAP."""
-
-    def __init__(self, interp, ljdap_env, fixture="count.lua", args=(), dash_l=True):
-        self.port = free_port()
-        env = dict(os.environ, WINEDEBUG="-all")
-        env["LJDAP"] = ljdap_env.format(port=self.port)
-        cmd = shlex.split(interp) + ["-e", DEV_PATH]
-        if dash_l:
-            cmd += ["-l", "ljdap"]
-        cmd += ["tests/fixtures/" + fixture] + list(args)
-        self.p = subprocess.Popen(cmd, cwd=ROOT, env=env, stdin=subprocess.PIPE,
-                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    def client(self, null_fields=False, timeout=10):
-        log = (lambda s: print("   ", s[:300], file=sys.stderr)) if DEBUG else None
-        return DapClient.connect("127.0.0.1", self.port, timeout=timeout,
-                                 null_fields=null_fields, log=log)
-
-    def finish(self, timeout=30):
-        out, err = self.p.communicate(timeout=timeout)
-        return self.p.returncode, out.decode("utf-8", "replace"), err.decode("utf-8", "replace")
-
-    def kill(self):
-        if self.p.poll() is None:
-            self.p.kill()
-            self.p.communicate()
-
-
-def handshake(t, c, nulls):
+def handshake(t, c, nulls, interp="luajit"):
     """initialize … configurationDone wie ein Editor; liefert die Capabilities."""
     r = c.request("initialize", {"clientID": "test", "adapterID": "ljdap", "linesStartAt1": True,
                                  "columnsStartAt1": True, "pathFormat": "path"},
@@ -62,13 +29,14 @@ def handshake(t, c, nulls):
     t.assertTrue(caps.get("supportsConfigurationDoneRequest"))
     t.assertEqual(caps.get("exceptionBreakpointFilters"), [])
     c.event("initialized")
-    c.request("attach", {"name": "ljdap"}, nulls=["__restart", "host"] if nulls else None)
+    c.request("attach", attach_args(interp), nulls=["__restart", "host"] if nulls else None)
     out = c.event("output")["body"]["output"]
     t.assertIn("ljdap 0.1.0-dev", out)
     bp = {"line": 3}
     if nulls:
         bp.update(condition=None, hitCondition=None, logMessage=None)
-    r = c.request("setBreakpoints", {"source": {"path": os.path.join(ROOT, "tests/fixtures/count.lua")},
+    # Datei existiert nicht: Antwort unverified, das Programm hält nicht an
+    r = c.request("setBreakpoints", {"source": {"path": os.path.join(ROOT, "tests/fixtures/fehlt.lua")},
                                      "breakpoints": [bp], "lines": [3]},
                   nulls=["sourceModified"] if nulls else None)
     bps = r["body"]["breakpoints"]
@@ -92,7 +60,7 @@ class M1(unittest.TestCase):
                             c = prog.client(null_fields=nulls)
                             time.sleep(0.3)
                             self.assertIsNone(prog.p.poll(), "Programm darf vor configurationDone nicht enden")
-                            handshake(self, c, nulls)
+                            handshake(self, c, nulls, interp)
                             code, out, err = prog.finish()
                             self.assertEqual(code, 0, err)
                             self.assertEqual(out.replace("\r", ""), "fixture: start\nfixture: ende true\n")
@@ -108,7 +76,7 @@ class M1(unittest.TestCase):
                 prog = Program(interp, "port={port},wait=1", args=["4", "poll"])
                 try:
                     c = prog.client()
-                    handshake(self, c, False)
+                    handshake(self, c, False, interp)
                     # Programm rechnet jetzt; Abfrage per Count-Hook (JIT bei Client aus).
                     # Nach dem Trennen ist der JIT wieder an: der zweite Client
                     # wird über ljdap.poll() in der Schleife angenommen.
@@ -141,7 +109,7 @@ class M1(unittest.TestCase):
                         try:
                             time.sleep(0.5)
                             c = prog.client(timeout=5)
-                            handshake(self, c, True)
+                            handshake(self, c, True, interp)
                             c.request("disconnect", {})
                             c.close()
                             code, out, err = prog.finish()
@@ -170,7 +138,7 @@ class M1(unittest.TestCase):
                     self.assertFalse(r["success"])
                     self.assertIn("nicht unterstützt", r["message"])
                     c.seq = 1
-                    handshake(self, c, False)
+                    handshake(self, c, False, interp)
                     code, out, err = prog.finish()
                     self.assertEqual(code, 0, err)
                 finally:
