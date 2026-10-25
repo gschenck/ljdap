@@ -129,7 +129,8 @@ Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
 - Ende-zu-Ende mit echtem Sublime Text (ohne Bildschirm, Xvfb):
   `SUBLIME_TEXT=…/sublime_text SUBLIME_DEBUGGER_SRC=… python3 tests/editors/e2e_sublime.py`
   – setzt Haltepunkt, steppt, prüft Zustand im Debugger-Paket und den
-  DAP-Mitschnitt; mit `LJDAP_E2E_SHOTS=<ordner>` zusätzlich Bildschirmfotos.
+  DAP-Mitschnitt; mit `LJDAP_E2E_OUT=<ordner>` zusätzlich Bildschirmfotos
+  und Protokolle (in der CI als Artefakt `sublime-e2e`).
 - Szenarien mit echtem DAP-Client: `python3 -m unittest discover -s tests/scenarios -v`;
   andere Interpreter über `LJDAP_INTERPS="luajit;lua5.1;wine /pfad/luajit.exe"`.
 - CI: Linux (luajit, lua5.1), Windows-LuaJIT (MinGW) unter Wine und auf

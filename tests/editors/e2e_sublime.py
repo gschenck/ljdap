@@ -107,8 +107,8 @@ class Sublime:
         raise Fail(f"Zeitüberschreitung: {what}; letzter Zustand {st}")
 
     def screenshot(self, name):
-        """Bildschirmfoto nach $LJDAP_E2E_SHOTS/<name>.png (ImageMagick import)."""
-        d = os.environ.get("LJDAP_E2E_SHOTS")
+        """Bildschirmfoto nach $LJDAP_E2E_OUT/<name>.png (ImageMagick import)."""
+        d = os.environ.get("LJDAP_E2E_OUT")
         if not d or not shutil.which("import"):
             return None
         os.makedirs(d, exist_ok=True)
@@ -200,6 +200,22 @@ def run(interp, exe, debugger_src):
         if prog and prog.poll() is None:
             prog.kill()
         st.close()
+        keep_logs(interp, work, proto, st)
+
+
+def keep_logs(interp, work, proto, st):
+    """Protokolle nach $LJDAP_E2E_OUT kopieren (CI-Artefakt), auch bei Fehlern."""
+    d = os.environ.get("LJDAP_E2E_OUT")
+    if not d:
+        return
+    os.makedirs(d, exist_ok=True)
+    tag = interp.split()[0].split("/")[-1]
+    for src, name in ((proto, "ljdap-protokoll.log"),
+                      (os.path.join(st.dir, "out.jsonl"), "treiber-out.jsonl"),
+                      (os.path.join(st.dir, "cmd.jsonl"), "treiber-cmd.jsonl"),
+                      (os.path.join(work, "sublime.log"), "sublime.log")):
+        if os.path.exists(src):
+            shutil.copy(src, os.path.join(d, f"{tag}-{name}"))
 
 
 def main():
@@ -218,6 +234,11 @@ def main():
         except Exception as e:
             ok = False
             print(f"FAIL {interp}: {e}")
+            d = os.environ.get("LJDAP_E2E_OUT")
+            if d:
+                os.makedirs(d, exist_ok=True)
+                with open(os.path.join(d, "FEHLER.txt"), "a", encoding="utf-8") as f:
+                    f.write(f"{interp}: {e}\n")
     return 0 if ok else 1
 
 

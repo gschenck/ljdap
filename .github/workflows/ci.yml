@@ -84,3 +84,33 @@ jobs:
         env:
           LJDAP_INTERPS: bin/luajit.exe
         run: python -m unittest discover -s tests/scenarios -v
+
+  sublime:
+    # Ende-zu-Ende mit echtem Sublime Text (ohne Bildschirm) und Paket Debugger
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Interpreter und Xvfb installieren
+        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 xvfb imagemagick
+      - name: Sublime Text installieren (apt-Repository von sublimetext.com)
+        run: |
+          sudo install -d -m 0755 /etc/apt/keyrings
+          wget -qO - https://download.sublimetext.com/sublimehq-pub.gpg | sudo tee /etc/apt/keyrings/sublimehq-pub.asc > /dev/null
+          echo -e 'Types: deb\nURIs: https://download.sublimetext.com/\nSuites: apt/stable/\nSigned-By: /etc/apt/keyrings/sublimehq-pub.asc' | sudo tee /etc/apt/sources.list.d/sublime-text.sources
+          sudo apt-get update && sudo apt-get install -y sublime-text
+          /opt/sublime_text/sublime_text --version
+      - name: Paket Debugger holen
+        run: git clone -q --depth 1 https://github.com/daveleroy/SublimeDebugger.git /tmp/SublimeDebugger
+      - name: Ende-zu-Ende-Test
+        env:
+          SUBLIME_TEXT: /opt/sublime_text/sublime_text
+          SUBLIME_DEBUGGER_SRC: /tmp/SublimeDebugger
+          LJDAP_E2E_OUT: ${{ github.workspace }}/e2e-out
+        run: python3 tests/editors/e2e_sublime.py luajit lua5.1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sublime-e2e
+          path: e2e-out
+          retention-days: 14
