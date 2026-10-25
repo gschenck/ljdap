@@ -92,7 +92,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Interpreter und Xvfb installieren
-        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 xvfb imagemagick
+        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 lua-socket xvfb imagemagick
       - name: Sublime Text installieren (apt-Repository von sublimetext.com)
         run: |
           sudo install -d -m 0755 /etc/apt/keyrings

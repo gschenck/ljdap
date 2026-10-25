@@ -178,7 +178,14 @@ def run(interp, exe, debugger_src):
         for label, action, (name, line) in steps:
             if action:
                 st.cmd("debugger", debugger_action=action)
-            s = st.wait_state(paused_at(name, line), f"{label} → {name}:{line}")
+            try:
+                s = st.wait_state(paused_at(name, line), f"{label} → {name}:{line}")
+            except Fail as e:
+                if prog.poll() is not None:
+                    _, err = prog.communicate()
+                    raise Fail(f"{e}; Programm beendet ({prog.returncode}), stderr: "
+                               f"{err.decode(errors='replace')[-800:]!r}")
+                raise
             seen.append((label, s["frame"]["name"], s["frame"]["line"], s["frame"]["path"]))
             st.screenshot(f"{interp.split()[0].split('/')[-1]}-{len(seen)}-{label}")
             if s["frame"]["path"] != STEPS:
