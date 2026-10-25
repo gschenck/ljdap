@@ -1,0 +1,64 @@
+{
+  "name": "ljdap",
+  "displayName": "ljdap – Lua/LuaJIT-Debugger",
+  "description": "Debugger für LuaJIT 2.1 und Lua 5.1 über ljdap (DAP-Server in reinem Lua)",
+  "version": "0.1.0",
+  "publisher": "gschenck",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/gschenck/ljdap" },
+  "engines": { "vscode": "^1.75.0" },
+  "categories": ["Debuggers"],
+  "keywords": ["lua", "luajit", "debugger", "dap"],
+  "main": "./extension.js",
+  "activationEvents": ["onDebugResolve:ljdap", "onDebugDynamicConfigurations:ljdap"],
+  "contributes": {
+    "breakpoints": [{ "language": "lua" }],
+    "debuggers": [
+      {
+        "type": "ljdap",
+        "label": "Lua (ljdap)",
+        "languages": ["lua"],
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": { "type": "string", "description": "Lua-Skript", "default": "${file}" },
+              "args": { "type": "array", "items": { "type": "string" }, "description": "Argumente des Skripts", "default": [] },
+              "cwd": { "type": "string", "description": "Arbeitsverzeichnis", "default": "${workspaceFolder}" },
+              "lua": { "type": "string", "description": "Interpreter (luajit, lua5.1, Pfad)", "default": "luajit" },
+              "env": { "type": "object", "description": "zusätzliche Umgebungsvariablen", "default": {} },
+              "port": { "type": "number", "description": "TCP-Port (Vorgabe: frei gewählt)" },
+              "ljdap": { "type": "string", "description": "Pfad zu ljdap.lua (Vorgabe: aus der Erweiterung)" },
+              "log": { "type": "string", "description": "Datei für einen DAP-Mitschnitt" },
+              "stopOnEntry": { "type": "boolean", "description": "an der ersten Zeile anhalten", "default": false },
+              "timeout": { "type": "number", "description": "Sekunden bis zur Verbindung", "default": 5 }
+            }
+          },
+          "attach": {
+            "properties": {
+              "host": { "type": "string", "description": "Adresse von ljdap im Programm", "default": "127.0.0.1" },
+              "port": { "type": "number", "description": "Port von ljdap (LJDAP=\"port=…\")", "default": 4711 },
+              "stopOnEntry": { "type": "boolean", "default": false },
+              "pathMappings": {
+                "type": "array",
+                "description": "Pfadzuordnung Editor ↔ Programm",
+                "items": { "type": "object", "properties": { "localRoot": { "type": "string" }, "remoteRoot": { "type": "string" } } }
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          { "type": "ljdap", "request": "launch", "name": "Lua: aktuelle Datei", "program": "${file}", "lua": "luajit" },
+          { "type": "ljdap", "request": "attach", "name": "Lua: anhängen (Port 4711)", "port": 4711 }
+        ],
+        "configurationSnippets": [
+          { "label": "ljdap: Lua-Skript starten", "body": { "type": "ljdap", "request": "launch", "name": "Lua: ${1:Skript}", "program": "^\"\\${file}\"", "lua": "luajit" } },
+          { "label": "ljdap: an Lua-Programm anhängen", "body": { "type": "ljdap", "request": "attach", "name": "Lua: anhängen", "port": 4711 } }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "test": "node --test test/lib.test.js test/extension.test.js"
+  }
+}

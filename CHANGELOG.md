@@ -20,6 +20,12 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 - M4: Sublime-Plugin `launch`: startet `lua ljdap.lua --port … skript.lua`
   selbst (freier Port, `program`, `args`, `cwd`, `lua`, `env`, `ljdap`),
   Programmausgabe in der Debugger-Konsole; `ljdap.lua` liegt im Paket.
+- M4: VS-Code-Erweiterung `editors/vscode/` (Typ `ljdap`): `launch` startet
+  den Starter-Modus selbst (freier Port, Ausgabe in der Debug-Konsole,
+  verständliche Meldung, wenn der Prozess vor der Verbindung endet),
+  `attach` verbindet per TCP; Tests mit nachgebildetem `vscode`-Modul und
+  Ende-zu-Ende mit echtem VS Code in der CI (`@vscode/test-electron`).
+  Release-Datei `ljdap-vscode-<version>.vsix`.
 - M3: Coroutinen als DAP-Threads (`ljdap.threads`): Hüllen um
   `coroutine.create/wrap/resume`, Haltepunkte und Stepping in Coroutinen,
   Stack und Variablen auch pausierter Coroutinen, Step über `yield`/`resume`
@@ -91,6 +97,10 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
   Test-Runner `tests/run.sh`, `tools/push_tags.cmd`.
 
 ### Behoben
+- Lag das Skript in einem Ordner namens `ljdap` und wurde `ljdap.lua` mit
+  absolutem Pfad gestartet, galt der ganze Ordner als Agentencode;
+  Haltepunkte im Skript wirkten nicht. Die Modulform wird jetzt an
+  `…/session.lua` erkannt.
 - Agentencode wurde am Verzeichnis erkannt: Mit der Ein-Datei-Version
   wären Haltepunkte in Skripten neben `ljdap.lua` übergangen worden; jetzt
   zählt genau die Datei.

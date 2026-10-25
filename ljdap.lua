@@ -2522,9 +2522,12 @@ local MAX_FRAMES = 1000
 --     aber "src/ljdap/init.lua"), daher mit vereinheitlichten Trennern.
 --   Ein-Datei-Version (ljdap.lua): genau diese Datei – nicht ihr
 --     Verzeichnis, dort liegen oft die Skripte des Benutzers.
+-- Modulform eindeutig an dieser Datei (session.lua) erkennen, nicht am
+-- Verzeichnisnamen: sonst gälte z. B. ein Projektordner namens „ljdap“ mit
+-- …/ljdap/ljdap.lua als Agentenverzeichnis (gefunden in M4).
 local SELF = getinfo(1, "S").source:gsub("\\", "/")
 local AGENT_PREFIX, AGENT_EXACT
-if SELF:match("/ljdap/[^/]+%.lua$") or SELF:match("^@ljdap/[^/]+%.lua$") then
+if SELF:match("[/@]session%.lua$") then
   AGENT_PREFIX = SELF:match("^(@.*/)")
 else
   AGENT_EXACT = SELF

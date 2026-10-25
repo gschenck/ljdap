@@ -188,6 +188,43 @@ class M4(unittest.TestCase):
                 prog.kill()
         self.run_each(body)
 
+    def test_project_dir_named_ljdap(self):
+        # Regression: …/ljdap/ljdap.lua mit absolutem Pfad galt als Modulform,
+        # das ganze Verzeichnis als Agentencode – Haltepunkte im Skript fielen aus
+        import shutil
+        import tempfile
+        def body(interp):
+            if is_wine(interp):
+                self.skipTest("Temp-Pfade unter Wine ohne Zuordnung")
+            base = tempfile.mkdtemp()
+            d = os.path.join(base, "ljdap")
+            os.makedirs(d)
+            try:
+                shutil.copy(os.path.join(ROOT, "ljdap.lua"), d)
+                shutil.copy(STEPS, d)
+                script = os.path.join(d, "steps.lua")
+                port = free_port()
+                p = subprocess.Popen(shlex.split(interp) + [os.path.join(d, "ljdap.lua"), "--port", str(port), script],
+                                     cwd=base, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                c = DapClient.connect("127.0.0.1", port, timeout=15)
+                try:
+                    c.request("initialize", {"adapterID": "ljdap"})
+                    c.request("launch", {"program": script})
+                    c.request("setBreakpoints", {"source": {"path": script}, "breakpoints": [{"line": 13}]})
+                    c.request("configurationDone")
+                    self.assertEqual(c.event("stopped")["body"]["reason"], "breakpoint")
+                    c.request("continue", {"threadId": 1})
+                    out, err = p.communicate(timeout=30)
+                    self.assertEqual(p.returncode, 0, err)
+                finally:
+                    c.close()
+                    if p.poll() is None:
+                        p.kill()
+                        p.communicate()
+            finally:
+                shutil.rmtree(base, ignore_errors=True)
+        self.run_each(body)
+
 
 if __name__ == "__main__":
     unittest.main()

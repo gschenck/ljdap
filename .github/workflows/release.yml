@@ -33,6 +33,7 @@ jobs:
         run: |
           sh tests/run.sh luajit lua5.1
           python3 -m unittest discover -s tests/editors
+          (cd editors/vscode && npm test)
           LJDAP_SINGLE=1 python3 -m unittest discover -s tests/scenarios
       - name: Dateien bauen
         run: sh tools/build_release.sh
@@ -44,7 +45,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release create "$GITHUB_REF_NAME" \
-            dist/ljdap.lua dist/ljdap-sublime-*.zip dist/ljdap.sublime-package dist/SHA256SUMS \
+            dist/ljdap.lua dist/ljdap-sublime-*.zip dist/ljdap.sublime-package dist/ljdap-vscode-*.vsix dist/SHA256SUMS \
             --title "ljdap ${{ steps.v.outputs.version }}" --notes-file dist/NOTES.md
       - name: Probelauf – Ergebnis melden
         if: github.ref_type != 'tag'

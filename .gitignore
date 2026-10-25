@@ -6,3 +6,6 @@ __pycache__/
 /tmp/
 tests/unit/_tmp_*
 dist/
+editors/vscode/ljdap.lua
+editors/vscode/node_modules/
+editors/vscode/.vscode-test/

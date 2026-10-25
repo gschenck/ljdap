@@ -126,3 +126,32 @@ jobs:
           name: sublime-e2e
           path: e2e-out
           retention-days: 14
+
+  vscode:
+    # Erweiterung: Node-Tests (nachgebildetes vscode-Modul) und Ende-zu-Ende
+    # mit echtem VS Code (@vscode/test-electron, ohne Bildschirm)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Interpreter und Xvfb installieren
+        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 xvfb zip libasound2t64 libgbm1 libgtk-3-0 libnss3 libxss1
+      - name: Node-Tests (luajit, lua5.1)
+        working-directory: editors/vscode
+        run: |
+          LJDAP_TEST_LUA=luajit npm test
+          LJDAP_TEST_LUA=lua5.1 npm test
+      - name: Ende-zu-Ende mit VS Code
+        working-directory: editors/vscode
+        run: |
+          cp ../../ljdap.lua .
+          npm install --no-save --no-package-lock @vscode/test-electron@2
+          for L in luajit lua5.1; do
+            LJDAP_TEST_LUA=$L xvfb-run -a node test/e2e/run.js 2>&1 | tee e2e-$L.log
+            test "${PIPESTATUS[0]}" -eq 0 || { echo "::error title=VS-Code-E2E $L::$(grep -v '^\s*$' e2e-$L.log | tail -n 15 | tr '\n' ' ' | cut -c1-1500)"; exit 1; }
+          done
+      - name: .vsix bauen
+        run: VSCE="npx --yes @vscode/vsce@3" sh tools/build_release.sh && ls -l dist

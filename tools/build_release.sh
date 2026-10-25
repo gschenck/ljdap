@@ -3,6 +3,7 @@
 #   ljdap.lua                   Ein-Datei-Version (muss aktuell eingecheckt sein)
 #   ljdap-sublime-<v>.zip       Ordner ljdap/ zum Entpacken nach Packages/
 #   ljdap.sublime-package       dasselbe als Paketdatei für "Installed Packages/"
+#   ljdap-vscode-<v>.vsix       VS-Code-Erweiterung (braucht Node/npx; VSCE=0 lässt sie aus)
 #   SHA256SUMS
 # Aufruf im Repo-Wurzelverzeichnis: sh tools/build_release.sh
 set -eu
@@ -23,6 +24,14 @@ cp ljdap.lua dist/stage/ljdap/ljdap.lua   # für launch (Starter-Modus)
 (cd dist/stage && zip -qrX "../ljdap-sublime-$V.zip" ljdap)
 (cd dist/stage/ljdap && zip -qrX ../../ljdap.sublime-package .)
 rm -rf dist/stage
-(cd dist && sha256sum ljdap.lua "ljdap-sublime-$V.zip" ljdap.sublime-package > SHA256SUMS)
+FILES="ljdap.lua ljdap-sublime-$V.zip ljdap.sublime-package"
+VSCE=${VSCE:-npx --yes @vscode/vsce@3}
+if [ "$VSCE" != "0" ]; then
+  cp ljdap.lua editors/vscode/ljdap.lua
+  (cd editors/vscode && $VSCE package --no-dependencies -o "../../dist/ljdap-vscode-$V.vsix")
+  rm -f editors/vscode/ljdap.lua
+  FILES="$FILES ljdap-vscode-$V.vsix"
+fi
+(cd dist && sha256sum $FILES > SHA256SUMS)
 echo "Version $V:"
 ls -l dist
