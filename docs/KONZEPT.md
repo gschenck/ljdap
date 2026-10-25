@@ -128,6 +128,11 @@ Regel: Entwicklung in `src/`, das eingecheckte `ljdap.lua` wird nur durch
   in Traces) → bei verbundenem Client ohnehin jit.off; ohne Client reicht
   das seltene Abfragen beim Verbindungsaufbau (accept) per Count-Hook im
   Interpreter, sonst Hinweis „Anhängen wirkt erst nach Interpreter-Code“.
+  **Gemessen (M1):** Mit JIT wird ein Client während einer kompilierten
+  Schleife nicht angenommen; mit `jit=off`, unter Lua 5.1 oder mit
+  `ljdap.poll()` in der Schleife sofort. Umsetzung M1: JIT aus (`jit.off()`
+  + `jit.flush()`), sobald ein Client verbunden ist, wieder an nach dem
+  Trennen; ohne Client `ljdap.poll()` bzw. Option `jit=off` (README).
 - **Coroutinen:** Hooks gelten je Coroutine. `coroutine.create/wrap` umhüllen
   und Hook in jeder neuen Coroutine setzen; DAP-Thread-ID je Coroutine
   (schwache Tabelle). Haupt-Coroutine = Thread 1. Stop in Coroutine zeigt
@@ -242,7 +247,10 @@ Platzhalter `json.null`, damit die Indizes stimmen.
 - Leistung: Messskript, Laufzeit ohne Client / mit Client ohne Haltepunkt /
   mit Haltepunkt in anderer Datei; Ziel (Annahme) ≤ 1,2× bzw. ≤ 3×
   gegenüber `jit.off()`-Lauf.
-- CI: GitHub Actions (öffentliches Repo → kein Token-Problem).
+- CI: GitHub Actions (öffentliches Repo → kein Token-Problem). Windows
+  zusätzlich zum Wine-Lauf auf einem echten Windows-Runner (für öffentliche
+  Repos kostenlos); luajit.exe wird in der CI mit MinGW aus einem
+  festgelegten LuaJIT-Commit gebaut.
 
 ## 12 Meilensteine
 
@@ -264,8 +272,8 @@ Platzhalter `json.null`, damit die Indizes stimmen.
   Importpfade gegen den aktuellen Stand des Pakets in der CI, mittelfristig
   Adapter upstream beitragen (15.1).
 - VS Code: `debugServer` ohne eigene Erweiterung nicht nutzbar (Annahme, M1).
-- Sandbox ohne Wine und MinGW: in M1 per apt nachinstallieren; ob Wine in
-  der Sitzung und in GitHub Actions stabil läuft, ist offen.
+- ~~Sandbox ohne Wine und MinGW~~ – in M1 installiert, Szenarien laufen
+  unter Wine.
 - Count-Hook/Pause unter JIT ohne verbundenen Client (6).
 - `jit.off()`/`jit.on()` mitten im Lauf: Verhalten bereits kompilierter
   Traces (flush nötig?).
@@ -359,7 +367,8 @@ class Ljdap(dap.Adapter):
 | lua5.1 | 5.1.5 (apt) |
 | python3 | 3.13 |
 | git, gh | vorhanden |
-| Wine, MinGW | fehlen, in M1 nachinstallieren |
+| Wine, MinGW | in M1 per apt nachinstalliert (Wine 9.0, MinGW-w64) |
+| luajit.exe | in M1 aus LuaJIT v2.1 `a4c0645` mit MinGW gebaut, läuft unter Wine |
 
 
 ### 15.4 Vergleich mit huanzai/lua-debug (Fork von actboy168/lua-debug)

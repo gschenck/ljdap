@@ -5,14 +5,74 @@ on:
     branches: [main]
   pull_request:
 
+env:
+  # LuaJIT-Stand für den Windows-Build (v2.1, 2026-10-21)
+  LUAJIT_COMMIT: a4c064539ea931274d407e1249b4bb575424a0f4
+
 jobs:
   linux:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Interpreter installieren
-        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1
+        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 lua-socket
       - name: Unit-Tests (luajit, lua5.1)
         run: sh tests/run.sh luajit lua5.1
-  # Ab M1: Szenarien mit tests/dap_client.py, Prüfung „ljdap.lua aktuell“
-  # (tools/amalgamate.lua), Windows-Teil mit luajit.exe unter Wine.
+      - name: Szenarien (luajit, lua5.1)
+        run: python3 -m unittest discover -s tests/scenarios -v
+
+  luajit-exe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: MinGW installieren
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+      - name: luajit.exe bauen (statisch, x64)
+        run: |
+          git clone -q -b v2.1 https://github.com/LuaJIT/LuaJIT.git
+          cd LuaJIT && git checkout -q "$LUAJIT_COMMIT"
+          make -j4 HOST_CC=gcc CROSS=x86_64-w64-mingw32- TARGET_SYS=Windows BUILDMODE=static
+      - uses: actions/upload-artifact@v4
+        with:
+          name: luajit-exe
+          path: LuaJIT/src/luajit.exe
+
+  wine:
+    needs: luajit-exe
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: luajit-exe
+          path: bin
+      - name: Wine installieren
+        run: sudo apt-get update && sudo apt-get install -y wine64
+      - name: Unit-Tests unter Wine
+        env:
+          WINEDEBUG: -all
+        run: |
+          for t in tests/unit/*_test.lua; do wine64 bin/luajit.exe "$t" || exit 1; done
+      - name: Szenarien unter Wine
+        env:
+          WINEDEBUG: -all
+          LJDAP_INTERPS: wine64 bin/luajit.exe
+        run: python3 -m unittest discover -s tests/scenarios -v
+
+  windows:
+    needs: luajit-exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: luajit-exe
+          path: bin
+      - name: Unit-Tests
+        shell: bash
+        run: |
+          for t in tests/unit/*_test.lua; do bin/luajit.exe "$t" || exit 1; done
+      - name: Szenarien
+        shell: bash
+        env:
+          LJDAP_INTERPS: bin/luajit.exe
+        run: python -m unittest discover -s tests/scenarios -v
