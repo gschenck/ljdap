@@ -10,6 +10,8 @@
 -- Fehlerkonvention: keine Fehler nach außen; nicht lesbare Werte erscheinen
 -- als Text "<Fehler: …>".
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local M = {}
 
 local MAX_STRING = 200
@@ -201,11 +203,12 @@ function M.sorted_keys(t)
 end
 
 --- DAP-Variable für name/wert; erzeugt bei Bedarf eine Kind-Referenz.
-function M.variable(refs, name, v)
+-- fr: Rahmen, in dem der Wert gefunden wurde (für evaluate/setVariable).
+function M.variable(refs, name, v, fr)
   local s, tn, expandable = M.format(v)
   local ref = 0
   if expandable then
-    ref = refs:add({ kind = "value", value = v })
+    ref = refs:add({ kind = "value", value = v, fr = fr })
   end
   return { name = name, value = s, type = tn, variablesReference = ref }
 end
@@ -220,17 +223,20 @@ function M.children(refs, item, start, count)
     local first = (tonumber(start) or 0) + 1
     local last = item.nkeys
     if tonumber(count) and count > 0 then last = math.min(last, first + count - 1) end
+    item.keymap = item.keymap or {}
     for i = first, last do
       local k = item.keys[i]
-      out[#out + 1] = M.variable(refs, key_name(k), rawget(v, k))
+      local name = key_name(k)
+      item.keymap[name] = k -- für setVariable: Anzeigename -> Originalschlüssel
+      out[#out + 1] = M.variable(refs, name, rawget(v, k), item.fr)
     end
     if first == 1 then
       local mt = debug.getmetatable(v)
-      if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt) end
+      if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt, item.fr) end
     end
   else
     local mt = debug.getmetatable(v)
-    if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt) end
+    if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt, item.fr) end
   end
   return out
 end

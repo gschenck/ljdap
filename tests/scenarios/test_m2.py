@@ -17,7 +17,7 @@ class Session:
     """Ein Fixture unter dem Debugger mit fertigem Handshake."""
 
     def __init__(self, t, interp, bps, fixture_name="steps.lua", args=(), nulls=False,
-                 lines1=True, attach_extra=None, env="port={port},wait=1"):
+                 lines1=True, attach_extra=None, env="port={port},wait=1", exc=(), bp_extra=None):
         self.t = t
         self.prog = Program(interp, env, fixture=fixture_name, args=args)
         self.c = c = self.prog.client(null_fields=nulls)
@@ -30,20 +30,22 @@ class Session:
             items = []
             for ln in lines:
                 b = {"line": ln}
+                b.update((bp_extra or {}).get(ln, {}))
                 if nulls:
                     b.update(condition=None, hitCondition=None, logMessage=None)
                 items.append(b)
             r = c.request("setBreakpoints", {"source": {"path": path}, "breakpoints": items},
                           nulls=["sourceModified"] if nulls else None)
             self.bp_results[path] = r["body"]["breakpoints"]
-        c.request("setExceptionBreakpoints", {"filters": []})
+        c.request("setExceptionBreakpoints", {"filters": list(exc)})
         c.request("configurationDone")
 
-    def stopped(self, reason=None, timeout=10):
+    def stopped(self, reason=None, timeout=10, thread=1):
         ev = self.c.event("stopped", timeout=timeout)["body"]
         if reason:
             self.t.assertEqual(ev["reason"], reason, ev)
-        self.t.assertEqual(ev["threadId"], 1)
+        if thread is not None:
+            self.t.assertEqual(ev["threadId"], thread)
         return ev
 
     def frames(self):

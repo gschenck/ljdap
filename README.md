@@ -7,12 +7,12 @@ einem beliebigen DAP-Client (Sublime Text mit Paket „Debugger“, VS Code).
 *A pure-Lua Debug Adapter Protocol server for LuaJIT 2.1 / Lua 5.1, loaded
 into the debuggee. No Node, no C module, no LuaSocket required.*
 
-> **Stand: M2 (0.1.0-dev).** Haltepunkte (mit Verschiebung von Kommentar-
-> und Leerzeilen), Step over/in/out, Stack, Locals/Upvalues/Varargs/Globals
-> mit aufklappbaren Tabellen, `ljdap.breakhere()`, `stopOnEntry`,
-> `pathMappings`; Linux und Windows. Coroutinen, `evaluate`, bedingte
-> Haltepunkte, Logpoints, Fehler-Halt und Pause folgen mit M3.
-> Plan: [docs/KONZEPT.md](docs/KONZEPT.md).
+> **Stand: M3 (0.1.0-dev).** Haltepunkte (Verschiebung von Kommentar- und
+> Leerzeilen, Bedingungen, Trefferzähler, Logpoints), Step over/in/out auch
+> über Coroutine-Grenzen, Pause, Stack und Variablen aller Coroutinen,
+> Werte ändern und Ausdrücke auswerten (Watch, Hover, Konsole), Halt bei
+> Fehlern (nicht abgefangen / alle), `ljdap.breakhere()`, `stopOnEntry`,
+> `pathMappings`; Linux und Windows. Plan: [docs/KONZEPT.md](docs/KONZEPT.md).
 
 ## Einbindung
 
@@ -77,9 +77,10 @@ Unter Lua 5.1 gibt es diese Einschränkung nicht.
      legen (*Preferences → Browse Packages…*, dann eine Ebene höher), oder
    - den Ordner `editors/sublime/` (bzw. `ljdap/` aus
      `ljdap-sublime-<version>.zip`) als `Packages/ljdap/` kopieren.
-    Die Datei `.python-version` (`3.8`)
-   gehört dazu: Plugin und Debugger-Paket müssen im selben Plugin-Host
-   laufen (ab Build 4200 ist das Python 3.14, das `3.8` übernimmt).
+
+   Die Datei `.python-version` (`3.8`) gehört dazu: Plugin und
+   Debugger-Paket müssen im selben Plugin-Host laufen (ab Build 4200 ist
+   das Python 3.14, das `3.8` übernimmt).
 3. Im `.sublime-project` eine Konfiguration anlegen (Vorlage:
    `editors/sublime/ljdap.sublime-project.example`, oder *Debugger: Add
    Configuration* → *ljdap*):
@@ -116,8 +117,25 @@ Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
 - Arbeitsverzeichnis: Relative Quellpfade werden mit dem Verzeichnis beim
   Start von ljdap aufgelöst. Wechselt das Programm danach das Verzeichnis
   und lädt relativ, passen die Pfade nicht.
-- Stand M2: Haltepunkte und Stepping nur in der Haupt-Coroutine; Bedingungen
-  und Logpoints werden noch ignoriert (Haltepunkt hält immer).
+- **Coroutinen:** erfasst werden Coroutinen, die über `coroutine.create`/
+  `wrap`/`resume` laufen, nachdem ljdap geladen ist. Code, der diese
+  Funktionen vorher in lokale Variablen kopiert hat, sieht ljdap unter Lua
+  5.1 nicht (dort gelten Hooks je Coroutine; unter LuaJIT global). Darum
+  ljdap per `-l ljdap` beim Start laden.
+- **Fehler-Halt:**
+  - *Nicht abgefangen* (Standard): unter LuaJIT nur, wenn ljdap mit
+    `luajit … -l ljdap skript.lua` geladen wird – ljdap führt das Skript
+    dann selbst unter `xpcall` aus (abschaltbar mit `LJDAP="run=0"`); mit
+    `require("ljdap").start{}` aus dem Programm heraus gibt es diesen Halt
+    nicht. Unter Lua 5.1 über `debug.traceback` des Interpreters.
+    Fehler, die eine Coroutine beenden, hält ljdap nur unter LuaJIT an
+    (Lua 5.1 erlaubt kein `yield` über `xpcall`).
+  - *Alle Fehler (auch in pcall)*: ljdap ersetzt solange `pcall`/`xpcall`
+    durch Hüllen; Code mit vorher kopiertem `local pcall = pcall` wird
+    nicht erfasst.
+- **Ausdrücke** werden im Programm ausgeführt (auch Funktionsaufrufe mit
+  Seiteneffekten); eine Endlosschleife im Ausdruck hält das Programm an.
+  Varargs stehen als Pseudovariable `vararg` bereit (nur LuaJIT).
 - Kein Lua 5.2–5.4, keine echten OS-Threads (eigene `lua_State`).
 - stdio-Transport nur blockierend und nur für Programme, die stdin/stdout
   nicht selbst nutzen; Pause im laufenden Programm ist damit nicht möglich.

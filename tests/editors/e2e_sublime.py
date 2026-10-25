@@ -234,13 +234,83 @@ def run(interp, exe, debugger_src):
         keep_logs(interp, work, proto, st)
 
 
+def run_m3(interp, exe, debugger_src):
+    """M3 in Sublime: Halt bei nicht abgefangenem Fehler (Sublime sendet den
+    Standardfilter selbst) und Haltepunkt in einer Coroutine."""
+    work = tempfile.mkdtemp(prefix="ljdap-e2e3-")
+    proto = os.path.join(work, "ljdap-protokoll.log")
+    report = {}
+    st = Sublime(exe, debugger_src, work)
+    prog = None
+    tag = interp.split()[0].split("/")[-1] + "-m3"
+    try:
+        st.wait_loaded()
+
+        def launch(fixture, args):
+            port = free_port()
+            env = dict(os.environ, LJDAP=f"port={port},wait=1,log={proto}")
+            p = subprocess.Popen(interp.split() + ["-e", DEV_PATH, "-l", "ljdap", "tests/fixtures/" + fixture]
+                                 + args, cwd=ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            st.cmd("start", configuration={"name": "ljdap", "type": "ljdap", "request": "attach",
+                                           "host": "127.0.0.1", "port": port})
+            return p
+
+        # 1. Fehler: Sublime hält mit dem Standardfilter "uncaught" in rechne:12
+        prog = launch("fehler.lua", ["uncaught"])
+        s = st.wait_state(paused_at("rechne", 12), "Fehler-Halt rechne:12")
+        report["fehler"] = (s["frame"]["name"], s["frame"]["line"])
+        st.screenshot(tag + "-1-fehler")
+        st.cmd("debugger", debugger_action="continue")
+        prog.communicate(timeout=30)
+        if prog.returncode != 1:
+            raise Fail(f"fehler.lua sollte mit 1 enden, nicht {prog.returncode}")
+        st.wait_state(lambda x: not x.get("session") or x.get("state_name") == "STOPPED", "Sitzungsende 1")
+
+        # 2. Coroutine: Haltepunkt im Körper, Thread ist nicht main
+        coro = os.path.join(ROOT, "tests", "fixtures", "coro.lua")
+        st.cmd("breakpoint", file=coro, line=6)
+        prog = launch("coro.lua", ["0"])
+        s = st.wait_state(paused_at("coro.lua:3", 6), "Haltepunkt in Coroutine coro.lua:6")
+        if not (s.get("thread") or "").startswith("Coroutine"):
+            raise Fail(f"Thread sollte eine Coroutine sein: {s.get('thread')}")
+        report["coroutine"] = (s["thread"], s["frame"]["line"])
+        st.screenshot(tag + "-2-coroutine")
+        st.cmd("breakpoint", file=coro, line=6)
+        st.cmd("debugger", debugger_action="continue")
+        out, err = prog.communicate(timeout=30)
+        if b"coro: 39" not in out:
+            raise Fail(f"coro.lua falsch beendet: {out!r} {err!r}")
+
+        fails, exc_filters = [], None
+        with open(proto, encoding="utf-8") as f:
+            for line in f:
+                parts = line.split(" ", 2)
+                if len(parts) < 3 or parts[1] not in ("<-", "->"):
+                    continue
+                msg = json.loads(parts[2])
+                if msg.get("command") == "setExceptionBreakpoints" and parts[1] == "<-":
+                    exc_filters = msg.get("arguments", {}).get("filters")
+                if parts[1] == "->" and msg.get("type") == "response" and not msg.get("success"):
+                    fails.append((msg.get("command"), msg.get("message")))
+        report["filter_von_sublime"] = exc_filters
+        report["abgelehnt"] = fails
+        if fails:
+            raise Fail(f"abgelehnte Requests: {fails}")
+        return report
+    finally:
+        if prog and prog.poll() is None:
+            prog.kill()
+        st.close()
+        keep_logs(interp + "-m3", work, proto, st)
+
+
 def keep_logs(interp, work, proto, st):
     """Protokolle nach $LJDAP_E2E_OUT kopieren (CI-Artefakt), auch bei Fehlern."""
     d = os.environ.get("LJDAP_E2E_OUT")
     if not d:
         return
     os.makedirs(d, exist_ok=True)
-    tag = interp.split()[0].split("/")[-1]
+    tag = interp.split()[0].split("/")[-1] + ("-m3" if interp.endswith("-m3") else "")
     for src, name in ((proto, "ljdap-protokoll.log"),
                       (os.path.join(st.dir, "out.jsonl"), "treiber-out.jsonl"),
                       (os.path.join(st.dir, "cmd.jsonl"), "treiber-cmd.jsonl"),
@@ -259,6 +329,7 @@ def main():
     for interp in sys.argv[1:] or ["luajit", "lua5.1"]:
         try:
             rep = run(interp, exe, src)
+            rep.update(run_m3(interp, exe, src))
             print(f"OK   {interp}")
             for k, v in rep.items():
                 print(f"     {k}: {v}")

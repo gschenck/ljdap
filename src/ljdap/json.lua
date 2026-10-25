@@ -25,6 +25,8 @@
 --   local s = json.encode{ seq = 1, type = "event", body = json.array{} }
 --   local t, err = json.decode(s)
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local M = {}
 
 local byte, char, sub, find, format, gsub =

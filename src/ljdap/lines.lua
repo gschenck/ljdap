@@ -9,6 +9,8 @@
 --
 -- Fehlerkonvention: lines.of_file(path) -> set | nil, err.
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local M = {}
 
 local has_jit_util, ju = pcall(require, "jit.util")

@@ -42,9 +42,33 @@ local function loaded_by_dash_l()
   return info == nil or info.what == "C"
 end
 
+-- LuaJIT mit `luajit [optionen] -l ljdap skript.lua args…`: das Skript selbst
+-- unter xpcall ausführen, damit nicht abgefangene Fehler am Fehlerort
+-- anhalten können (luajit.c ruft dafür kein Lua auf). Nur wenn -l ljdap die
+-- letzte Option vor dem Skript ist; abschaltbar mit LJDAP="run=0".
+-- Lua 5.1 braucht das nicht (ljdap.errors ersetzt debug.traceback).
+local function takeover(opt)
+  if not jit or opt.run == "0" or opt.run == false then return end
+  if type(arg) ~= "table" or type(arg[0]) ~= "string" or arg[0] == "-" then return end
+  if not ((arg[-2] == "-l" and arg[-1] == "ljdap") or arg[-1] == "-lljdap") then return end
+  local n, args = 0, {}
+  for i = 1, #arg do n = i; args[i] = arg[i] end
+  args.n = n
+  local lowest = -1
+  while arg[lowest - 1] ~= nil do lowest = lowest - 1 end
+  local progname = arg[lowest] or "luajit"
+  -- Das Skript läuft noch innerhalb von require("ljdap"): vorher eintragen,
+  -- sonst meldet ein require("ljdap") im Skript eine Ladeschleife
+  package.loaded["ljdap"] = M
+  require("ljdap.errors").run_script(arg[0], args, progname)
+end
+
 local env = os.getenv("LJDAP")
-if env or loaded_by_dash_l() then
-  M.start(session.parse_env(env))
+local dash_l = loaded_by_dash_l()
+if env or dash_l then
+  local opt = session.parse_env(env)
+  M.start(opt)
+  if dash_l then takeover(opt) end
 end
 
 return M

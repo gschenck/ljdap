@@ -11,7 +11,7 @@
 
 local MODULES = {
   "version", "json", "transport", "protocol", "paths", "lines",
-  "breakpoints", "vars", "hooks", "session",
+  "breakpoints", "vars", "hooks", "eval", "threads", "errors", "session",
 }
 local MAIN = "init"
 

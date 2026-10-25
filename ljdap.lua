@@ -36,6 +36,8 @@ package.preload["ljdap.json"] = function(...)
 --   local s = json.encode{ seq = 1, type = "event", body = json.array{} }
 --   local t, err = json.decode(s)
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local M = {}
 
 local byte, char, sub, find, format, gsub =
@@ -420,6 +422,8 @@ package.preload["ljdap.transport"] = function(...)
 --   con:close()
 --   f = transport.framer(); f:feed(daten); f:next() -> body | nil | nil, err
 --   transport.frame(body) -> "Content-Length: n\r\n\r\n" .. body
+
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
 
 local M = {}
 
@@ -1039,6 +1043,8 @@ package.preload["ljdap.protocol"] = function(...)
 --   ch:event(name, body)
 --   ch:close()
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local json = require("ljdap.json")
 local transport = require("ljdap.transport")
 
@@ -1156,6 +1162,8 @@ package.preload["ljdap.paths"] = function(...)
 --   remoteRoot = Pfad im untersuchten Programm
 --
 -- Fehlerkonvention: reine Funktionen, keine Fehler; unbekannte Quellen → nil.
+
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
 
 local M = {}
 
@@ -1355,6 +1363,8 @@ package.preload["ljdap.lines"] = function(...)
 -- die nächste Codezeile schieben, auch in noch nicht aufgerufenen Funktionen.
 --
 -- Fehlerkonvention: lines.of_file(path) -> set | nil, err.
+
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
 
 local M = {}
 
@@ -1596,6 +1606,8 @@ package.preload["ljdap.vars"] = function(...)
 -- Fehlerkonvention: keine Fehler nach außen; nicht lesbare Werte erscheinen
 -- als Text "<Fehler: …>".
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local M = {}
 
 local MAX_STRING = 200
@@ -1787,11 +1799,12 @@ function M.sorted_keys(t)
 end
 
 --- DAP-Variable für name/wert; erzeugt bei Bedarf eine Kind-Referenz.
-function M.variable(refs, name, v)
+-- fr: Rahmen, in dem der Wert gefunden wurde (für evaluate/setVariable).
+function M.variable(refs, name, v, fr)
   local s, tn, expandable = M.format(v)
   local ref = 0
   if expandable then
-    ref = refs:add({ kind = "value", value = v })
+    ref = refs:add({ kind = "value", value = v, fr = fr })
   end
   return { name = name, value = s, type = tn, variablesReference = ref }
 end
@@ -1806,17 +1819,20 @@ function M.children(refs, item, start, count)
     local first = (tonumber(start) or 0) + 1
     local last = item.nkeys
     if tonumber(count) and count > 0 then last = math.min(last, first + count - 1) end
+    item.keymap = item.keymap or {}
     for i = first, last do
       local k = item.keys[i]
-      out[#out + 1] = M.variable(refs, key_name(k), rawget(v, k))
+      local name = key_name(k)
+      item.keymap[name] = k -- für setVariable: Anzeigename -> Originalschlüssel
+      out[#out + 1] = M.variable(refs, name, rawget(v, k), item.fr)
     end
     if first == 1 then
       local mt = debug.getmetatable(v)
-      if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt) end
+      if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt, item.fr) end
     end
   else
     local mt = debug.getmetatable(v)
-    if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt) end
+    if mt then out[#out + 1] = M.variable(refs, "[metatable]", mt, item.fr) end
   end
   return out
 end
@@ -1836,10 +1852,12 @@ package.preload["ljdap.hooks"] = function(...)
 -- kostet allein der Aufruf eines leeren Lua-Hooks je Zeile 4–7×, jede
 -- weitere Funktion im Pfad vervielfacht das (Konzept 6, Messung M2).
 --
--- debug.sethook wirkt nur auf die laufende Coroutine. Stand M2 hängt ljdap
--- nur an der Haupt-Coroutine; eine Änderung, die in einer anderen Coroutine
--- angefordert wird (ljdap.poll() aus einer Coroutine), wird beim nächsten
--- Count-Ereignis auf der Haupt-Coroutine nachgeholt. Coroutinen folgen in M3.
+-- Coroutinen (gemessen M3): Unter LuaJIT gelten Hooks global für alle
+-- Coroutinen. Unter Lua 5.1 gelten sie je Thread: ljdap setzt den Hook in
+-- jeder registrierten Coroutine (H.attach, H.set_threads) und in der
+-- Haupt-Coroutine nur, wenn gerade dort Code läuft (5.1 liefert kein
+-- Handle auf den Hauptthread); sonst wird beim nächsten Hook-Aufruf auf der
+-- Haupt-Coroutine nachgeholt.
 --
 -- Fehlerkonvention: keine Fehler; H.foreign() meldet fremde Hooks.
 
@@ -1854,6 +1872,8 @@ local f_lines = {}    -- Zeile -> Anzahl Haltepunkte
 local f_step = false  -- es wird gesteppt
 
 local getinfo_hook = debug.gethook
+local PER_THREAD = jit == nil   -- Lua 5.1: Hooks je Coroutine
+local each_thread = nil         -- function(fn) über alle Coroutinen
 
 local apply
 
@@ -1862,22 +1882,51 @@ local function hook(ev, line)
     if f_lines[line] or f_step then on_line(line) end
     return
   end
-  if dirty and coroutine.running() == nil then apply() end
+  if dirty then apply() end
   on_count()
 end
 H.fn = hook
 
-apply = function()
-  if coroutine.running() ~= nil then dirty = true; return false end
-  local cur = getinfo_hook()
-  if cur and cur ~= hook then dirty = false; return false end -- fremder Hook
+local function set_on(co)
   if not want_line and want_count <= 0 then
-    debug.sethook()
+    if co then debug.sethook(co) else debug.sethook() end
+  elseif co then
+    debug.sethook(co, hook, want_line and "l" or "", want_count)
   else
     debug.sethook(hook, want_line and "l" or "", want_count)
   end
+end
+
+apply = function()
+  if PER_THREAD and each_thread then
+    each_thread(function(co)
+      local cur = getinfo_hook(co)
+      if cur == nil or cur == hook then set_on(co) end
+    end)
+  end
+  if coroutine.running() ~= nil then
+    -- Haupt-Coroutine (Lua 5.1) bzw. global (LuaJIT, über die Coroutine
+    -- gesetzt wirkt es dort ebenfalls) – unter 5.1 nachholen
+    if PER_THREAD then dirty = true; return false end
+  end
+  local cur = getinfo_hook()
+  if cur and cur ~= hook then dirty = false; return false end -- fremder Hook
+  set_on(nil)
   dirty = false
   return true
+end
+
+--- Lua 5.1: Iterator über die registrierten Coroutinen festlegen.
+function H.set_threads(iter)
+  each_thread = iter
+end
+
+--- Lua 5.1: Hook in einer neuen Coroutine setzen (LuaJIT: global, nichts zu tun).
+function H.attach(co)
+  if PER_THREAD and type(co) == "thread" then
+    local cur = getinfo_hook(co)
+    if cur == nil or cur == hook then set_on(co) end
+  end
 end
 
 --- Rückrufe festlegen: line(line) und count().
@@ -1917,13 +1966,472 @@ end
 return H
 end
 
+package.preload["ljdap.eval"] = function(...)
+-- ljdap.eval – Ausdrücke und Anweisungen im Kontext eines Stack-Rahmens.
+--
+-- Rahmen-Zugriff über ein Accessor-Objekt (aus der Session):
+--   acc.info(what)        -> debug.getinfo des Rahmens
+--   acc.getlocal(i)       -> name, wert   (i < 0: Varargs, nur LuaJIT)
+--   acc.setlocal(i, v)
+-- Ohne Accessor wird global (in _G) ausgewertet.
+--
+-- Umgebung per setfenv: Lesen Locals -> Upvalues -> fenv der Funktion
+-- (-> _G über deren __index); Varargs als Pseudovariable `vararg`
+-- (Tabelle). Schreiben auf Locals/Upvalues wird gesammelt und nach dem Lauf
+-- per setlocal/setupvalue zurückgeschrieben, sonst geht es in die fenv.
+--
+-- Zuerst als Ausdruck ("return " .. text), sonst als Anweisung.
+--
+-- Fehlerkonvention: E.run -> true, ergebnisse (Tabelle mit n) | false, text.
+
+local E = {}
+
+local pcall = pcall -- Original, nicht die Hülle aus ljdap.errors
+local loadstring, setfenv, getfenv = loadstring, setfenv, getfenv
+local getupvalue, setupvalue = debug.getupvalue, debug.setupvalue
+
+local function pack(...)
+  return { n = select("#", ...), ... }
+end
+
+local function compile(text)
+  local fn = loadstring("return " .. text, "=(auswertung)")
+  if fn then return fn end
+  local err
+  fn, err = loadstring(text, "=(auswertung)")
+  if not fn then return nil, (err:gsub("^%(auswertung%):1: ", "")) end
+  return fn
+end
+E.compile = compile
+
+-- Baut die Umgebung; liefert env, commit (Rückschreiben).
+local function frame_env(acc)
+  local locals, ups = {}, {}
+  local i = 1
+  while true do
+    local name, v = acc.getlocal(i)
+    if not name then break end
+    if name:sub(1, 1) ~= "(" then locals[name] = { i = i, v = v } end -- spätere verdecken
+    i = i + 1
+  end
+  local va
+  if acc.getlocal(-1) ~= nil then
+    va = {}
+    local k = 1
+    while true do
+      local name, v = acc.getlocal(-k)
+      if not name then break end
+      va[k] = v
+      k = k + 1
+    end
+    va.n = k - 1
+  end
+  local info = acc.info("f")
+  local func = info and info.func
+  if func then
+    local u = 1
+    while true do
+      local name, v = getupvalue(func, u)
+      if not name then break end
+      if name ~= "" and not locals[name] then ups[name] = { u = u, v = v } end
+      u = u + 1
+    end
+  end
+  local fenv = (func and getfenv(func)) or _G
+  local dirty = {}
+  local env = setmetatable({}, {
+    __index = function(_, k)
+      local l = locals[k]
+      if l then return l.v end
+      local up = ups[k]
+      if up then return up.v end
+      if k == "vararg" and va then return va end
+      return fenv[k]
+    end,
+    __newindex = function(_, k, v)
+      local l = locals[k]
+      if l then l.v = v; dirty[#dirty + 1] = l; return end
+      local up = ups[k]
+      if up then up.v = v; dirty[#dirty + 1] = up; return end
+      fenv[k] = v
+    end,
+  })
+  local function commit()
+    for _, d in ipairs(dirty) do
+      if d.i then acc.setlocal(d.i, d.v)
+      elseif func then setupvalue(func, d.u, d.v) end
+    end
+  end
+  return env, commit, { locals = locals, ups = ups, func = func }
+end
+E.frame_env = frame_env
+
+--- Wertet text aus. acc = Rahmen-Accessor oder nil (global).
+function E.run(text, acc)
+  if type(text) ~= "string" or text:match("^%s*$") then
+    return false, "leerer Ausdruck"
+  end
+  local fn, err = compile(text)
+  if not fn then return false, err end
+  local env, commit = _G, nil
+  if acc then env, commit = frame_env(acc) end
+  setfenv(fn, env)
+  local r = pack(pcall(fn))
+  if not r[1] then
+    local msg = tostring(r[2])
+    return false, (msg:gsub("^%(auswertung%):%d+: ", ""))
+  end
+  if commit then commit() end
+  local res = { n = r.n - 1 }
+  for k = 2, r.n do res[k - 1] = r[k] end
+  return true, res
+end
+
+return E
+end
+
+package.preload["ljdap.threads"] = function(...)
+-- ljdap.threads – Coroutinen als DAP-Threads.
+--
+-- Haupt-Coroutine = Thread 1. Jede Coroutine bekommt beim ersten Kontakt
+-- (create/wrap oder erstes resume) eine ID; Zuordnung über schwache
+-- Tabellen, tote Coroutinen verschwinden mit dem GC.
+--
+-- T.install() ersetzt coroutine.create/wrap/resume:
+--   create  registriert und meldet die neue Coroutine (on_new, z. B. Hook
+--           setzen unter Lua 5.1); optional wird der Körper umhüllt
+--           (body_wrap, LuaJIT: Fehler-Halt in Coroutinen)
+--   resume  registriert Coroutinen, die vor ljdap entstanden sind
+-- Grenze: Code, der coroutine.resume/wrap vor dem Laden von ljdap in eine
+-- lokale Variable kopiert hat, wird nicht erreicht.
+--
+-- Fehlerkonvention: keine Fehler; Wrapper verhalten sich wie die Originale.
+
+local T = {}
+
+local orig = {
+  create = coroutine.create, wrap = coroutine.wrap, resume = coroutine.resume,
+  running = coroutine.running, status = coroutine.status,
+}
+T.orig = orig
+
+local ids = setmetatable({}, { __mode = "k" })    -- co -> id
+local byid = setmetatable({}, { __mode = "v" })   -- id -> co
+local names = setmetatable({}, { __mode = "k" })  -- co -> Anzeigename
+local next_id = 2
+local on_new, body_wrap
+
+--- Registriert co (f = Körperfunktion, nur für den Namen); liefert die ID.
+function T.register(co, f)
+  local id = ids[co]
+  if id then return id end
+  id = next_id
+  next_id = next_id + 1
+  ids[co] = id
+  byid[id] = co
+  local where = ""
+  if type(f) == "function" then
+    local i = debug.getinfo(f, "S")
+    if i and i.what ~= "C" then where = (" (%s:%d)"):format(i.short_src, i.linedefined) end
+  end
+  names[co] = "Coroutine " .. id .. where
+  if on_new then on_new(co) end
+  return id
+end
+
+--- ID eines Threads (nil = Haupt-Coroutine = 1).
+function T.id(co)
+  if co == nil then return 1 end
+  return ids[co] or T.register(co)
+end
+
+--- Coroutine zu einer ID; für 1 liefert die Funktion nil, true.
+function T.get(id)
+  id = tonumber(id)
+  if id == 1 then return nil, true end
+  return byid[id], false
+end
+
+--- Alle lebenden Threads als DAP-Liste, nach ID sortiert.
+function T.list()
+  local out = { { id = 1, name = "main" } }
+  local tmp = {}
+  for co, id in pairs(ids) do
+    if orig.status(co) ~= "dead" then tmp[#tmp + 1] = { id = id, name = names[co] } end
+  end
+  table.sort(tmp, function(a, b) return a.id < b.id end)
+  for _, t in ipairs(tmp) do out[#out + 1] = t end
+  return out
+end
+
+--- Alle registrierten lebenden Coroutinen (für Hooks).
+function T.each(fn)
+  for co in pairs(ids) do
+    if orig.status(co) ~= "dead" then fn(co) end
+  end
+end
+
+local function wrap_results(ok, ...)
+  if ok then return ... end
+  error((...), 0)
+end
+
+local installed = false
+
+--- Ersetzt die coroutine-Funktionen. new_cb(co): neue Coroutine;
+-- wrap_body(f) -> f': Körper umhüllen (oder nil).
+function T.install(new_cb, wrap_body)
+  on_new, body_wrap = new_cb, wrap_body
+  if installed then return end
+  installed = true
+  coroutine.create = function(f)
+    local g = f
+    if body_wrap and type(f) == "function" then g = body_wrap(f) end
+    local co = orig.create(g)
+    T.register(co, f)
+    return co
+  end
+  coroutine.wrap = function(f)
+    local co = coroutine.create(f)
+    return function(...)
+      return wrap_results(orig.resume(co, ...))
+    end
+  end
+  coroutine.resume = function(co, ...)
+    if type(co) == "thread" and not ids[co] then T.register(co) end
+    return orig.resume(co, ...)
+  end
+end
+
+--- Stellt die Originale wieder her (nur wenn noch unsere Hüllen aktiv sind).
+function T.uninstall()
+  if not installed then return end
+  installed = false
+  coroutine.create, coroutine.wrap, coroutine.resume = orig.create, orig.wrap, orig.resume
+end
+
+return T
+end
+
+package.preload["ljdap.errors"] = function(...)
+-- ljdap.errors – Anhalten bei Fehlern.
+--
+-- Fehlerarten (DAP-Filter):
+--   raised    jeder Fehler in pcall/xpcall: ljdap ersetzt pcall/xpcall durch
+--             Hüllen mit eigenem Fehler-Handler, der am Fehlerort aufgerufen
+--             wird (Stack noch intakt)
+--   uncaught  Fehler, die das Programm beenden:
+--             LuaJIT:  bei `-l ljdap` führt ljdap das Skript selbst unter
+--                      xpcall aus (E.run_script), luajit.c ruft kein Lua
+--             Lua 5.1: lua.c ruft für den Traceback das globale
+--                      debug.traceback – ljdap ersetzt es; ob der Fehler
+--                      ungeschützt ist, zeigt die Schutztiefe der pcall-Hüllen
+--             Coroutinen (nur LuaJIT): Körper unter xpcall (body_wrap);
+--                      Lua 5.1 erlaubt kein yield über xpcall hinweg
+--
+-- E.on_error(err, kind, marker) setzt die Session; marker ist die Funktion
+-- direkt unter dem Fehlerort (für die Stack-Ebenen).
+--
+-- Fehlerkonvention: die Hüllen verhalten sich wie pcall/xpcall; Fehler im
+-- Rückruf werden geschluckt (nie Programmabbruch durch den Debugger).
+
+local E = {}
+
+local orig_pcall, orig_xpcall = pcall, xpcall
+local orig_traceback = debug.traceback
+local running = coroutine.running
+local unpack, select = unpack, select
+
+local is_luajit = jit ~= nil
+E.is_luajit = is_luajit
+
+E.on_error = nil
+
+local function notify(err, kind, marker)
+  local cb = E.on_error
+  if cb then orig_pcall(cb, err, kind, marker) end
+end
+
+------------------------------------------------------------------------
+-- Schutztiefe je Thread
+------------------------------------------------------------------------
+
+local depth = setmetatable({}, { __mode = "k" })
+local main_depth = 0
+
+local function add_depth(d)
+  local co = running()
+  if co then depth[co] = (depth[co] or 0) + d
+  else main_depth = main_depth + d end
+end
+
+--- Liegt der laufende Code in einem pcall/xpcall (über die Hüllen)?
+function E.protected()
+  local co = running()
+  if co then return (depth[co] or 0) > 0 end
+  return main_depth > 0
+end
+
+------------------------------------------------------------------------
+-- pcall/xpcall-Hüllen
+------------------------------------------------------------------------
+
+local raised_handler
+raised_handler = function(err)
+  notify(err, "raised", raised_handler)
+  return err
+end
+
+local function finish(...)
+  add_depth(-1)
+  return ...
+end
+
+local wrap_pcall, wrap_xpcall
+if is_luajit then
+  wrap_pcall = function(f, ...)
+    add_depth(1)
+    return finish(orig_xpcall(f, raised_handler, ...))
+  end
+  wrap_xpcall = function(f, msgh, ...)
+    local h
+    h = function(err)
+      notify(err, "raised", h)
+      return msgh(err)
+    end
+    add_depth(1)
+    return finish(orig_xpcall(f, h, ...))
+  end
+else
+  -- Lua 5.1: xpcall kennt keine Argumente
+  wrap_pcall = function(f, ...)
+    add_depth(1)
+    if select("#", ...) == 0 then return finish(orig_xpcall(f, raised_handler)) end
+    local n, args = select("#", ...), { ... }
+    return finish(orig_xpcall(function() return f(unpack(args, 1, n)) end, raised_handler))
+  end
+  wrap_xpcall = function(f, msgh)
+    local h
+    h = function(err)
+      notify(err, "raised", h)
+      return msgh(err)
+    end
+    add_depth(1)
+    return finish(orig_xpcall(f, h))
+  end
+end
+
+local wrapped = false
+
+--- pcall/xpcall-Hüllen ein- (true) oder ausschalten.
+function E.wrap_protected(on)
+  if on and not wrapped then
+    pcall, xpcall = wrap_pcall, wrap_xpcall -- luacheck: ignore (globale Ersetzung gewollt)
+    wrapped = true
+  elseif not on and wrapped then
+    if pcall == wrap_pcall then pcall = orig_pcall end
+    if xpcall == wrap_xpcall then xpcall = orig_xpcall end
+    wrapped = false
+  end
+end
+
+------------------------------------------------------------------------
+-- Ungefangene Fehler
+------------------------------------------------------------------------
+
+-- Lua 5.1: lua.c ruft bei einem Fehler im Hauptchunk debug.traceback(msg, 2)
+-- aus seinem C-Handler auf, noch am Fehlerort.
+-- Die Hülle muss sich für Benutzercode wie das Original verhalten (Test
+-- errors_threads_test): Thread-Form unverändert durchreichen, ohne
+-- Argumente keine Meldungszeile, sonst Ebene um die Hülle verschieben.
+local tb_wrapper
+tb_wrapper = function(...)
+  local n = select("#", ...)
+  local msg, level = ...
+  if type(msg) == "thread" then
+    local r = orig_traceback(...) -- Ebenen gelten im anderen Thread
+    return r
+  end
+  if n >= 1 and running() == nil and main_depth == 0 then
+    local caller = debug.getinfo(2, "S")
+    if caller and caller.what == "C" then notify(msg, "uncaught", tb_wrapper) end
+  end
+  if n == 0 then
+    local r = orig_traceback("", 2)
+    return (r:gsub("^\n", ""))
+  end
+  local r = orig_traceback(msg, (tonumber(level) or 1) + 1)
+  return r
+end
+
+--- Lua 5.1: debug.traceback ersetzen (für ungefangene Fehler im Hauptchunk).
+function E.install_traceback()
+  if not is_luajit and debug.traceback == orig_traceback then
+    debug.traceback = tb_wrapper
+  end
+end
+
+--- LuaJIT: Coroutine-Körper unter xpcall (ungefangene Fehler in Coroutinen).
+function E.body_wrap(f)
+  local h
+  h = function(err)
+    notify(err, "uncaught", h)
+    return err
+  end
+  local function done(ok, ...)
+    if ok then return ... end
+    error((...), 0)
+  end
+  return function(...)
+    return done(orig_xpcall(f, h, ...))
+  end
+end
+
+local function error_text(err)
+  if type(err) == "string" or type(err) == "number" then return tostring(err) end
+  local mt = getmetatable(err)
+  if mt and mt.__tostring then
+    local ok, s = orig_pcall(tostring, err)
+    if ok then return s end
+  end
+  return "(error object is a " .. type(err) .. " value)"
+end
+E.error_text = error_text
+
+--- LuaJIT bei `-l ljdap`: führt das Skript unter xpcall aus und beendet den
+-- Prozess wie luajit.c (Rückgabe 0 bzw. 1 mit Traceback auf stderr).
+function E.run_script(path, args, progname)
+  local fn, err = loadfile(path)
+  if not fn then
+    io.stderr:write(progname, ": ", tostring(err), "\n")
+    io.stderr:flush()
+    os.exit(1, true)
+  end
+  local h
+  h = function(e)
+    notify(e, "uncaught", h)
+    return orig_traceback(error_text(e), 2)
+  end
+  local ok, res = orig_xpcall(function() return fn(unpack(args, 1, args.n)) end, h)
+  io.stdout:flush()
+  if not ok then
+    io.stderr:write(progname, ": ", tostring(res), "\n")
+    io.stderr:flush()
+    os.exit(1, true)
+  end
+  os.exit(0, true)
+end
+
+return E
+end
+
 package.preload["ljdap.session"] = function(...)
 -- ljdap.session – Zustand des Agenten und Behandlung der DAP-Requests.
 --
--- Stand M2: Verbindung, Anhängen, Haltepunkte, Stepping (in/over/out),
--- Stack, Scopes und Variablen auf der Haupt-Coroutine. Coroutinen,
--- evaluate/setVariable, Fehler-Halt, Bedingungen/Logpoints und Pause
--- folgen in M3.
+-- Stand M3: Verbindung, Anhängen, Haltepunkte mit Bedingung/Trefferzähler/
+-- Logpoint, Stepping (in/over/out) auch über Coroutine-Grenzen, Pause,
+-- Stack/Scopes/Variablen aller Coroutinen, evaluate/setVariable, Halt bei
+-- Fehlern (uncaught/raised) mit exceptionInfo.
 --
 -- Zustände:
 --   idle       nicht gestartet
@@ -1945,6 +2453,8 @@ package.preload["ljdap.session"] = function(...)
 -- in Handlern werden als Fehlerantwort gemeldet, nie an das Programm
 -- weitergereicht.
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local json = require("ljdap.json")
 local transport = require("ljdap.transport")
 local protocol = require("ljdap.protocol")
@@ -1952,9 +2462,13 @@ local paths = require("ljdap.paths")
 local breakpoints = require("ljdap.breakpoints")
 local vars = require("ljdap.vars")
 local hooks = require("ljdap.hooks")
+local eval = require("ljdap.eval")
+local threads = require("ljdap.threads")
+local errors = require("ljdap.errors")
 local VERSION = require("ljdap.version")
 
-local getinfo, getlocal, getupvalue = debug.getinfo, debug.getlocal, debug.getupvalue
+local getinfo, getlocal, setlocal = debug.getinfo, debug.getlocal, debug.setlocal
+local getupvalue = debug.getupvalue
 
 local M = {}
 
@@ -2007,8 +2521,9 @@ local S = {
   cwd = nil,
   mapper = nil,
   bps = breakpoints.new(),
-  step = nil,         -- { mode = "in"|"over"|"out", depth = n }
-  stop = nil,         -- { marker, reason, depth, refs }
+  step = nil,         -- { mode = "in"|"over"|"out"|"pause", depth, thread, reason }
+  stop = nil,         -- { marker, skip, reason, depth, refs, thread, tid, frames, exc }
+  exc = { uncaught = false, raised = false }, -- Ausnahme-Filter des Clients
   resume = false,
   lines1 = true,      -- Client zählt Zeilen ab 1
   cols1 = true,
@@ -2045,18 +2560,62 @@ local function update_hooks()
   hooks.set(line, S.opt and S.opt.poll or 0)
 end
 
--- Ebene von Frame k des angehaltenen Programms, relativ zum Aufrufer.
+-- pcall/xpcall-Hüllen nur, solange sie gebraucht werden: Filter „raised“,
+-- unter Lua 5.1 auch „uncaught“ (Schutztiefe für die traceback-Erkennung).
+local function update_exc()
+  local exc = S.exc
+  local need = S.ch ~= nil and (exc.raised or (not errors.is_luajit and exc.uncaught))
+  errors.wrap_protected(need and true or false)
+end
+
+-- Ebene von Frame k über der Markierungsfunktion, relativ zum Aufrufer.
 -- (Ebene 1 = diese Funktion, 2 = Aufrufer; Markierung bei l -> Frame 0
--- liegt für den Aufrufer bei Ebene l.)
-local function user_level(k)
-  local marker = S.stop and S.stop.marker
+-- liegt für den Aufrufer bei Ebene l, zuzüglich skip übersprungener Rahmen.)
+-- Nicht in eine Hilfsfunktion verpacken: die Ebene gilt für den Aufrufer.
+local function user_level(k, marker, skip)
   if not marker then return nil end
   for l = 2, 10000 do
     local i = getinfo(l, "f")
     if not i then return nil end
-    if i.func == marker then return l + (k or 0) end
+    if i.func == marker then return l + (skip or 0) + (k or 0) end
   end
   return nil
+end
+
+-- Rahmen-Accessor für eval und Variablen. Kein Tail Call auf debug.*:
+-- LuaJIT ersetzt dabei den Rahmen der Hülle, die Ebene stimmt dann nicht.
+--   fr = { co = thread, lv = Ebene }            Rahmen einer anderen Coroutine
+--   fr = { k = n, marker = f, skip = s }        Rahmen im laufenden Thread
+local function accessor(fr)
+  if fr.co then
+    local co, lv = fr.co, fr.lv
+    return {
+      info = function(what) local r = getinfo(co, lv, what); return r end,
+      getlocal = function(i) local n, v = getlocal(co, lv, i); return n, v end,
+      setlocal = function(i, v) local n = setlocal(co, lv, i, v); return n end,
+    }
+  end
+  local k, marker, skip = fr.k, fr.marker, fr.skip
+  return {
+    info = function(what)
+      local l = user_level(k, marker, skip)
+      if not l then return nil end
+      local r = getinfo(l, what)
+      return r
+    end,
+    getlocal = function(i)
+      local l = user_level(k, marker, skip)
+      if not l then return nil end
+      local n, v = getlocal(l, i)
+      return n, v
+    end,
+    setlocal = function(i, v)
+      local l = user_level(k, marker, skip)
+      if not l then return nil end
+      local n = setlocal(l, i, v)
+      return n
+    end,
+  }
 end
 
 ------------------------------------------------------------------------
@@ -2065,15 +2624,21 @@ end
 
 local service -- vorwärts
 
--- Hält das Programm an. marker: Funktion direkt unter Frame 0;
--- depth: Stacktiefe von Frame 0 (für Step over/out).
-local function enter_stop(reason, marker, depth, extra)
+-- Hält das Programm an. marker: Funktion direkt unter Frame 0 (zuzüglich
+-- skip Rahmen); depth: Stacktiefe von Frame 0 (für Step over/out).
+local function enter_stop(reason, marker, depth, extra, skip)
   S.busy = true
   S.step = nil
-  S.stop = { marker = marker, reason = reason, depth = depth, refs = vars.refs() }
+  local thread = coroutine.running()
+  S.stop = { marker = marker, reason = reason, depth = depth, skip = skip or 0,
+             refs = vars.refs(), thread = thread, tid = threads.id(thread), frames = {} }
   S.resume = false
-  local body = { reason = reason, threadId = 1, allThreadsStopped = true }
-  if extra then for k, v in pairs(extra) do body[k] = v end end
+  local body = { reason = reason, threadId = S.stop.tid, allThreadsStopped = true }
+  if extra then
+    for k, v in pairs(extra) do
+      if k == "exc" then S.stop.exc = v else body[k] = v end
+    end
+  end
   S.ch:event("stopped", body)
   local ok, err = pcall(function()
     while S.ch and not S.resume do service(-1) end
@@ -2086,22 +2651,85 @@ local function enter_stop(reason, marker, depth, extra)
   S.busy = false
 end
 
+-- Wertet text im Rahmen des Programms aus, das gerade den Hook ausgelöst
+-- hat (Frame 0 über hooks.fn). Für Bedingungen und Logpoints.
+local function eval_here(text)
+  return eval.run(text, accessor({ k = 0, marker = hooks.fn, skip = 0 }))
+end
+
+local function hit_ok(cond, n)
+  local op, num = cond:match("^%s*([<>=%%]*)%s*(%d+)%s*$")
+  num = tonumber(num)
+  if not num then return true end
+  if op == "" or op == "==" or op == "=" then return n == num
+  elseif op == ">" then return n > num
+  elseif op == ">=" then return n >= num
+  elseif op == "<" then return n < num
+  elseif op == "<=" then return n <= num
+  elseif op == "%" then return num > 0 and n % num == 0 end
+  return true
+end
+
+local function plain(v)
+  if type(v) == "string" then return v end
+  return (vars.format(v))
+end
+
+-- Prüft Bedingung, Trefferzähler und Logpoint. Liefert anhalten(bool),
+-- beschreibung. S.busy schützt vor Hooks im ausgewerteten Code.
+local function check_bp(bp, line, src)
+  if bp.condition and bp.condition ~= "" then
+    S.busy = true
+    local ok, r = eval_here(bp.condition)
+    S.busy = false
+    if not ok then
+      output(("ljdap: Bedingung „%s“ fehlerhaft: %s\n"):format(bp.condition, r), "stderr")
+      return true, "Bedingung fehlerhaft: " .. r
+    end
+    if not r[1] then return false end
+  end
+  bp.hits = bp.hits + 1
+  if bp.hitCondition and bp.hitCondition ~= "" and not hit_ok(bp.hitCondition, bp.hits) then
+    return false
+  end
+  if bp.logMessage and bp.logMessage ~= "" then
+    S.busy = true
+    local msg = bp.logMessage:gsub("{(.-)}", function(expr)
+      local ok, r = eval_here(expr)
+      if not ok then return "<" .. r .. ">" end
+      local parts = {}
+      for i = 1, r.n do parts[i] = plain(r[i]) end
+      return table.concat(parts, ", ")
+    end)
+    S.busy = false
+    local ev = { category = "console", output = msg .. "\n", line = line_out(line) }
+    if src then ev.source = { name = src.path:match("([^/\\]+)$"), path = src.path } end
+    S.ch:event("output", ev)
+    return false
+  end
+  return true
+end
+
 -- Zeilen-Hook. Ebenen: 1 = on_line, 2 = Hook, 3 = Programm.
 local function on_line(line)
   if S.busy or not S.ch then return end
   -- Vorfilter liegt im Hook (hooks.lua): hier nur noch Treffer-Kandidaten
   local step = S.step
-  local bp_line = S.bps.lines[line]
   local info = getinfo(3, "S")
   if not info then return end
   local source = info.source
   if is_agent(source) then return end
-  if bp_line then
-    local bp = S.bps:lookup(S.mapper:from_source(source), line)
+  if S.bps.lines[line] then
+    local src = S.mapper:from_source(source)
+    local bp = S.bps:lookup(src, line)
     if bp then
-      local d = 3
-      while getinfo(d, "l") do d = d + 1 end
-      return enter_stop("breakpoint", hooks.fn, d - 3, { hitBreakpointIds = { bp.id } })
+      local stop, desc = check_bp(bp, line, src)
+      if stop then
+        local d = 3
+        while getinfo(d, "l") do d = d + 1 end
+        return enter_stop("breakpoint", hooks.fn, d - 3,
+                          { hitBreakpointIds = { bp.id }, description = desc })
+      end
     end
   end
   if step then
@@ -2109,8 +2737,23 @@ local function on_line(line)
     local d = 3
     while getinfo(d, "l") do d = d + 1 end
     d = d - 3
-    if mode == "in" or (mode == "over" and d <= step.depth) or (mode == "out" and d < step.depth) then
+    if mode == "in" or mode == "pause" then
       return enter_stop(step.reason or "step", hooks.fn, d)
+    end
+    local co = coroutine.running()
+    if co == step.thread then
+      if (mode == "over" and d <= step.depth) or (mode == "out" and d < step.depth) then
+        return enter_stop("step", hooks.fn, d)
+      end
+    else
+      -- anderer Thread: halten, wenn der Step-Thread nicht mehr läuft
+      -- (yield oder Ende, zurück im Aufrufer); nicht, wenn er uns per
+      -- resume aufgerufen hat (Status "normal"). Haupt-Coroutine (nil) ist
+      -- in einer Coroutine immer "normal".
+      local st = step.thread and coroutine.status(step.thread) or "normal"
+      if st == "suspended" or st == "dead" then
+        return enter_stop("step", hooks.fn, d)
+      end
     end
   end
 end
@@ -2125,6 +2768,30 @@ function M.breakhere(marker)
   while getinfo(d, "l") do d = d + 1 end
   enter_stop("pause", marker, d - 3, { description = "ljdap.breakhere()" })
   return true
+end
+
+-- Rückruf aus ljdap.errors am Fehlerort. kind = "raised" | "uncaught".
+local function on_error(err, kind, marker)
+  if S.busy or not S.ch or not S.configured or S.stop then return end
+  local exc = S.exc
+  if kind == "raised" and not exc.raised then return end
+  if kind == "uncaught" and not (exc.uncaught or exc.raised) then return end
+  local text = errors.error_text(err)
+  -- führende C-Rahmen (error, assert, Handler-Aufruf) überspringen
+  local base = user_level(0, marker, 0)
+  if not base then return end
+  local skip = 0
+  while true do
+    local i = getinfo(base + skip, "S")
+    if not i then skip = 0; break end
+    if i.what ~= "C" then break end
+    skip = skip + 1
+  end
+  local d = base + skip
+  while getinfo(d, "l") do d = d + 1 end
+  local label = kind == "uncaught" and "nicht abgefangener Fehler" or "Fehler (in pcall)"
+  enter_stop("exception", marker, d - base - skip,
+             { description = label, text = text, exc = { text = text, kind = kind } }, skip)
 end
 
 ------------------------------------------------------------------------
@@ -2147,7 +2814,18 @@ function handlers.initialize(req)
   S.cols1 = S.client.columnsStartAt1 ~= false
   S.ch:respond(req, {
     supportsConfigurationDoneRequest = true,
-    exceptionBreakpointFilters = json.array(),
+    supportsConditionalBreakpoints = true,
+    supportsHitConditionalBreakpoints = true,
+    supportsLogPoints = true,
+    supportsSetVariable = true,
+    supportsEvaluateForHovers = true,
+    supportsExceptionInfoRequest = true,
+    exceptionBreakpointFilters = {
+      { filter = "uncaught", label = "Nicht abgefangene Fehler", default = true,
+        description = "Hält, wenn ein Fehler das Programm (oder eine Coroutine) beenden würde" },
+      { filter = "raised", label = "Alle Fehler (auch in pcall)", default = false,
+        description = "Hält bei jedem Fehler, auch wenn pcall/xpcall ihn abfängt" },
+    },
   })
   S.ch:event("initialized", json.object())
 end
@@ -2190,7 +2868,7 @@ function handlers.setBreakpoints(req)
   if type(src.path) ~= "string" or src.path == "" then
     for i, r in ipairs(reqs) do
       out[i] = { verified = false, line = line_out(r.line),
-                 message = "Quelle ohne Pfad wird erst ab M3 unterstützt" }
+                 message = "Quelle ohne Dateipfad wird nicht unterstützt" }
     end
   else
     local key, abs = S.mapper:from_client(src.path)
@@ -2205,6 +2883,16 @@ function handlers.setBreakpoints(req)
 end
 
 function handlers.setExceptionBreakpoints(req)
+  local args = req.arguments or {}
+  local exc = { uncaught = false, raised = false }
+  for _, f in ipairs(type(args.filters) == "table" and args.filters or {}) do
+    if f == "uncaught" or f == "raised" then exc[f] = true end
+  end
+  for _, o in ipairs(type(args.filterOptions) == "table" and args.filterOptions or {}) do
+    if type(o) == "table" and (o.filterId == "uncaught" or o.filterId == "raised") then exc[o.filterId] = true end
+  end
+  S.exc = exc
+  update_exc()
   S.ch:respond(req, json.object())
 end
 
@@ -2219,19 +2907,23 @@ function handlers.configurationDone(req)
   if S.stop_on_entry and not S.stop then
     S.step = { mode = "in", reason = "entry" }
   end
+  update_exc()
   update_hooks()
 end
 
 function handlers.threads(req)
-  S.ch:respond(req, { threads = { { id = 1, name = "main" } } })
+  S.ch:respond(req, { threads = threads.list() })
 end
 
-local function frame_of(info, k)
+local function frame_of(info, id)
   local name = info.name
   if info.what == "main" then name = "Hauptchunk"
   elseif info.what == "tail" then name = "(tail call)"
+  elseif not name and info.what == "Lua" then
+    -- aus C aufgerufen (pcall, coroutine.resume …): Lua kennt keinen Namen
+    name = (info.short_src or "?"):match("([^/\\]+)$") .. ":" .. tostring(info.linedefined)
   elseif not name then name = "?" end
-  local f = { id = k + 1, name = name, line = 0, column = 0 }
+  local f = { id = id, name = name, line = 0, column = 0 }
   if info.what == "C" then
     f.name = info.name and ("[C] " .. info.name) or "[C]"
     f.presentationHint = "subtle"
@@ -2261,42 +2953,84 @@ function handlers.stackTrace(req)
   local first = tonumber(args.startFrame) or 0
   local levels = tonumber(args.levels) or 0
   if levels <= 0 then levels = MAX_FRAMES end
-  local base = user_level(0)
-  local frames = json.array()
-  local k = 0
-  while base and k < MAX_FRAMES do
-    local info = getinfo(base + k, "nSl")
-    if not info then break end
-    if k >= first and #frames < levels then
-      frames[#frames + 1] = frame_of(info, k)
-    end
-    k = k + 1
+  local tid = tonumber(args.threadId) or S.stop.tid
+  local reg = S.stop.frames
+  local list = {}
+  -- Agentenrahmen ausblenden
+  local function add(info, fr)
+    if info.what ~= "C" and info.what ~= "tail" and is_agent(info.source) then return end
+    list[#list + 1] = { info = info, fr = fr }
   end
-  S.ch:respond(req, { stackFrames = frames, totalFrames = k })
+  if tid == S.stop.tid then
+    local st = S.stop
+    local base = user_level(0, st.marker, st.skip)
+    local k = 0
+    while base and k < MAX_FRAMES do
+      local info = getinfo(base + k, "nSl")
+      if not info then break end
+      add(info, { k = k, marker = st.marker, skip = st.skip })
+      k = k + 1
+    end
+  else
+    local co, is_main = threads.get(tid)
+    if is_main then
+      list[1] = { pseudo = "(Haupt-Coroutine, wartet in coroutine.resume)" }
+    elseif co and coroutine.status(co) ~= "dead" then
+      local lv = 0
+      while lv < MAX_FRAMES do
+        local info = getinfo(co, lv, "nSl")
+        if not info then break end
+        add(info, { co = co, lv = lv })
+        lv = lv + 1
+      end
+    end
+  end
+  -- C-Rahmen am Boden (Interpreter, Agent-Aufrufer) abschneiden
+  while #list > 1 and list[#list].info and list[#list].info.what == "C" do list[#list] = nil end
+  local frames = json.array()
+  for i = first + 1, math.min(#list, first + levels) do
+    local e = list[i]
+    local id = #reg + 1
+    reg[id] = e.fr or false
+    if e.pseudo then
+      frames[#frames + 1] = { id = id, name = e.pseudo, line = 0, column = 0, presentationHint = "label" }
+    else
+      frames[#frames + 1] = frame_of(e.info, id)
+    end
+  end
+  S.ch:respond(req, { stackFrames = frames, totalFrames = #list })
+end
+
+local function frame_ref(id)
+  local fr = S.stop.frames[tonumber(id) or 0]
+  if fr == nil then
+    fr = { k = (tonumber(id) or 1) - 1, marker = S.stop.marker, skip = S.stop.skip }
+  end
+  return fr or nil
 end
 
 function handlers.scopes(req)
   if not need_stop(req) then return end
-  local k = (tonumber((req.arguments or {}).frameId) or 1) - 1
+  local fr = frame_ref((req.arguments or {}).frameId)
   local refs = S.stop.refs
-  local lv = user_level(k)
   local scopes = json.array()
-  if lv then
-    local info = getinfo(lv, "Sf")
+  if fr then
+    local acc = accessor(fr)
+    local info = acc.info("Sf")
     if info and info.what ~= "C" and info.what ~= "tail" then
       scopes[#scopes + 1] = { name = "Lokal", presentationHint = "locals", expensive = false,
-                              variablesReference = refs:add({ kind = "locals", frame = k }) }
-      if getlocal(lv, -1) ~= nil then
+                              variablesReference = refs:add({ kind = "locals", fr = fr }) }
+      if acc.getlocal(-1) ~= nil then
         scopes[#scopes + 1] = { name = "Varargs", presentationHint = "arguments", expensive = false,
-                                variablesReference = refs:add({ kind = "varargs", frame = k }) }
+                                variablesReference = refs:add({ kind = "varargs", fr = fr }) }
       end
       if info.func and getupvalue(info.func, 1) ~= nil then
         scopes[#scopes + 1] = { name = "Upvalues", expensive = false,
-                                variablesReference = refs:add({ kind = "upvalues", frame = k }) }
+                                variablesReference = refs:add({ kind = "upvalues", fr = fr }) }
       end
       local env = info.func and getfenv(info.func) or _G
       scopes[#scopes + 1] = { name = env == _G and "Global" or "Umgebung (fenv)", expensive = true,
-                              variablesReference = refs:add({ kind = "value", value = env }) }
+                              variablesReference = refs:add({ kind = "value", value = env, fr = fr }) }
     end
   end
   S.ch:respond(req, { scopes = scopes })
@@ -2312,38 +3046,137 @@ function handlers.variables(req)
     if item.kind == "value" then
       for i, v in ipairs(vars.children(refs, item, args.start, args.count)) do list[i] = v end
     else
-      local lv = user_level(item.frame)
-      if lv then
-        if item.kind == "locals" then
-          local i = 1
-          while true do
-            local name, v = getlocal(lv, i)
-            if not name then break end
-            if name:sub(1, 1) ~= "(" then list[#list + 1] = vars.variable(refs, name, v) end
-            i = i + 1
+      local acc = accessor(item.fr)
+      item.names = {}
+      if item.kind == "locals" then
+        local i = 1
+        while true do
+          local name, v = acc.getlocal(i)
+          if not name then break end
+          if name:sub(1, 1) ~= "(" then
+            list[#list + 1] = vars.variable(refs, name, v, item.fr)
+            item.names[name] = i
           end
-        elseif item.kind == "varargs" then
-          local i = 1
-          while true do
-            local name, v = getlocal(lv, -i)
-            if not name then break end
-            list[#list + 1] = vars.variable(refs, "[" .. i .. "]", v)
-            i = i + 1
-          end
-        elseif item.kind == "upvalues" then
-          local f = getinfo(lv, "f").func
-          local i = 1
-          while true do
-            local name, v = getupvalue(f, i)
-            if not name then break end
-            list[#list + 1] = vars.variable(refs, name ~= "" and name or ("?" .. i), v)
-            i = i + 1
-          end
+          i = i + 1
+        end
+      elseif item.kind == "varargs" then
+        local i = 1
+        while true do
+          local name, v = acc.getlocal(-i)
+          if not name then break end
+          list[#list + 1] = vars.variable(refs, "[" .. i .. "]", v, item.fr)
+          i = i + 1
+        end
+      elseif item.kind == "upvalues" then
+        local info = acc.info("f")
+        local f = info and info.func
+        local i = 1
+        while f do
+          local name, v = getupvalue(f, i)
+          if not name then break end
+          local nm = name ~= "" and name or ("?" .. i)
+          list[#list + 1] = vars.variable(refs, nm, v, item.fr)
+          item.names[nm] = i
+          i = i + 1
         end
       end
     end
   end
   S.ch:respond(req, { variables = list })
+end
+
+function handlers.evaluate(req)
+  local args = req.arguments or {}
+  local acc, fr
+  if S.stop then
+    fr = args.frameId and frame_ref(args.frameId)
+      or { k = 0, marker = S.stop.marker, skip = S.stop.skip }
+    acc = accessor(fr)
+  end
+  local ok, r = eval.run(args.expression, acc)
+  if not ok then
+    S.ch:fail(req, r)
+    return
+  end
+  local refs = S.stop and S.stop.refs or vars.refs()
+  if r.n == 0 then
+    S.ch:respond(req, { result = "", variablesReference = 0 })
+  elseif r.n == 1 then
+    local v = vars.variable(refs, "", r[1], fr)
+    if not S.stop then v.variablesReference = 0 end
+    S.ch:respond(req, { result = v.value, type = v.type, variablesReference = v.variablesReference })
+  else
+    local parts = {}
+    for i = 1, r.n do parts[i] = (vars.format(r[i])) end
+    S.ch:respond(req, { result = table.concat(parts, ", "), variablesReference = 0 })
+  end
+end
+
+function handlers.setVariable(req)
+  if not need_stop(req) then return end
+  local args = req.arguments or {}
+  local refs = S.stop.refs
+  local item = refs:get(args.variablesReference)
+  local name = args.name
+  if not item or type(name) ~= "string" then
+    S.ch:fail(req, "unbekannte Variable")
+    return
+  end
+  local fr = item.fr
+  local acc = fr and accessor(fr)
+  local ok, r = eval.run(args.value, acc)
+  if not ok then
+    S.ch:fail(req, r)
+    return
+  end
+  local v = r[1]
+  if item.kind == "locals" then
+    local idx = item.names and item.names[name]
+    if not idx then S.ch:fail(req, "lokale Variable nicht gefunden: " .. name); return end
+    acc.setlocal(idx, v)
+  elseif item.kind == "varargs" then
+    local i = tonumber(name:match("^%[(%d+)%]$"))
+    if not i then S.ch:fail(req, "ungültiger Vararg-Name"); return end
+    acc.setlocal(-i, v)
+  elseif item.kind == "upvalues" then
+    local u = item.names and item.names[name]
+    local info = acc.info("f")
+    if not u or not info then S.ch:fail(req, "Upvalue nicht gefunden: " .. name); return end
+    debug.setupvalue(info.func, u, v)
+  elseif item.kind == "value" and type(item.value) == "table" then
+    local key = item.keymap and item.keymap[name]
+    if key == nil then S.ch:fail(req, "Schlüssel nicht gefunden: " .. name); return end
+    rawset(item.value, key, v)
+    item.keys = nil -- neu sortieren beim nächsten Abruf
+  else
+    S.ch:fail(req, "Variable nicht änderbar")
+    return
+  end
+  local var = vars.variable(refs, name, v, fr)
+  S.ch:respond(req, { value = var.value, type = var.type, variablesReference = var.variablesReference })
+end
+
+function handlers.exceptionInfo(req)
+  if not need_stop(req) then return end
+  local e = S.stop.exc
+  if not e then
+    S.ch:fail(req, "kein Fehler-Halt")
+    return
+  end
+  S.ch:respond(req, {
+    exceptionId = e.kind == "uncaught" and "Lua-Fehler (nicht abgefangen)" or "Lua-Fehler (in pcall)",
+    description = e.text,
+    breakMode = e.kind == "uncaught" and "unhandled" or "always",
+    details = { message = e.text },
+  })
+end
+
+function handlers.pause(req)
+  S.ch:respond(req, json.object())
+  if not S.stop then
+    S.step = { mode = "pause", reason = "pause" }
+    update_hooks()
+  end
 end
 
 local function resume_with(req, step)
@@ -2354,9 +3187,13 @@ local function resume_with(req, step)
 end
 
 function handlers.continue(req) resume_with(req, nil) end
-function handlers.next(req) resume_with(req, { mode = "over", depth = S.stop and S.stop.depth }) end
+function handlers.next(req)
+  resume_with(req, S.stop and { mode = "over", depth = S.stop.depth, thread = S.stop.thread })
+end
 function handlers.stepIn(req) resume_with(req, { mode = "in" }) end
-function handlers.stepOut(req) resume_with(req, { mode = "out", depth = S.stop and S.stop.depth }) end
+function handlers.stepOut(req)
+  resume_with(req, S.stop and { mode = "out", depth = S.stop.depth, thread = S.stop.thread })
+end
 
 local jit_for_client -- vorwärts, s. u.
 
@@ -2371,6 +3208,7 @@ local function drop_client()
   S.resume = true -- ein laufender Halt endet; das Programm läuft weiter
   if S.server then S.state = "listening" else S.state = "idle" end
   update_hooks()
+  update_exc()
 end
 
 function handlers.disconnect(req)
@@ -2414,6 +3252,7 @@ local function on_connect(con)
   S.ch = protocol.channel(con, S.logfile and log or nil)
   S.state = "connected"
   S.bps:clear()           -- ein neuer Client schickt alle Haltepunkte neu
+  S.exc = { uncaught = false, raised = false }
   S.mapper = paths.mapper(S.cwd)
   S.lines1, S.cols1 = true, true
   jit_for_client(true)
@@ -2490,6 +3329,8 @@ local function wait_configured()
 end
 
 hooks.init(on_line, M.poll)
+hooks.set_threads(threads.each)
+errors.on_error = on_error
 
 ------------------------------------------------------------------------
 -- Öffentlich
@@ -2529,6 +3370,9 @@ function M.start(opt)
     log("--", "ljdap " .. VERSION .. " Start, cwd " .. tostring(S.cwd))
   end
   if o.jit == "off" and jit then jit.off() end
+  -- Coroutinen als Threads; unter LuaJIT Körper unter xpcall (Fehler-Halt)
+  threads.install(hooks.attach, errors.is_luajit and errors.body_wrap or nil)
+  errors.install_traceback()
   if hooks.foreign() then
     warn("vorhandener debug.sethook-Hook (Profiler?) – ljdap-Hooks aus, nur ljdap.poll() und breakhere()")
   end
@@ -2625,9 +3469,33 @@ local function loaded_by_dash_l()
   return info == nil or info.what == "C"
 end
 
+-- LuaJIT mit `luajit [optionen] -l ljdap skript.lua args…`: das Skript selbst
+-- unter xpcall ausführen, damit nicht abgefangene Fehler am Fehlerort
+-- anhalten können (luajit.c ruft dafür kein Lua auf). Nur wenn -l ljdap die
+-- letzte Option vor dem Skript ist; abschaltbar mit LJDAP="run=0".
+-- Lua 5.1 braucht das nicht (ljdap.errors ersetzt debug.traceback).
+local function takeover(opt)
+  if not jit or opt.run == "0" or opt.run == false then return end
+  if type(arg) ~= "table" or type(arg[0]) ~= "string" or arg[0] == "-" then return end
+  if not ((arg[-2] == "-l" and arg[-1] == "ljdap") or arg[-1] == "-lljdap") then return end
+  local n, args = 0, {}
+  for i = 1, #arg do n = i; args[i] = arg[i] end
+  args.n = n
+  local lowest = -1
+  while arg[lowest - 1] ~= nil do lowest = lowest - 1 end
+  local progname = arg[lowest] or "luajit"
+  -- Das Skript läuft noch innerhalb von require("ljdap"): vorher eintragen,
+  -- sonst meldet ein require("ljdap") im Skript eine Ladeschleife
+  package.loaded["ljdap"] = M
+  require("ljdap.errors").run_script(arg[0], args, progname)
+end
+
 local env = os.getenv("LJDAP")
-if env or loaded_by_dash_l() then
-  M.start(session.parse_env(env))
+local dash_l = loaded_by_dash_l()
+if env or dash_l then
+  local opt = session.parse_env(env)
+  M.start(opt)
+  if dash_l then takeover(opt) end
 end
 
 return M

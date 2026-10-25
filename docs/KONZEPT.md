@@ -156,7 +156,11 @@ Verzeichnis. Releases über den Workflow `release` bei Tag `v*`
   `ljdap.poll()` in der Schleife sofort. Umsetzung M1: JIT aus (`jit.off()`
   + `jit.flush()`), sobald ein Client verbunden ist, wieder an nach dem
   Trennen; ohne Client `ljdap.poll()` bzw. Option `jit=off` (README).
-- **Coroutinen:** Hooks gelten je Coroutine. `coroutine.create/wrap` umhüllen
+- **Coroutinen:** Hooks gelten je Coroutine. **Gemessen (M3):** nur unter
+  Lua 5.1; unter LuaJIT gelten Hooks global für alle Coroutinen. Step über
+  Coroutine-Grenzen: „over“/„out“ halten im anderen Thread, sobald der
+  Step-Thread nicht mehr läuft (Status suspended/dead), nicht in einer von
+  ihm per resume gestarteten Coroutine (Status normal). `coroutine.create/wrap` umhüllen
   und Hook in jeder neuen Coroutine setzen; DAP-Thread-ID je Coroutine
   (schwache Tabelle). Haupt-Coroutine = Thread 1. Stop in Coroutine zeigt
   deren Stack.
@@ -180,6 +184,16 @@ Verzeichnis. Releases über den Workflow `release` bei Tag `v*`
   mit Handler, der am Fehlerort die Haltschleife betritt (Stack ist im
   Handler noch intakt). Option „alle Fehler“ (auch in pcall) per Umhüllung
   von `error`/`assert` – als Ausnahmefilter „raised“ vs. „uncaught“.
+  **Umgesetzt (M3), nach Messung angepasst:** Statt `error`/`assert` werden
+  `pcall`/`xpcall` umhüllt (Handler am Fehlerort, erfasst auch Laufzeitfehler
+  wie Index auf nil). „uncaught“: LuaJIT ruft bei einem Fehler im Hauptchunk
+  kein Lua auf (luajit.c nutzt `luaL_traceback`) → bei `-l ljdap` führt ljdap
+  das Skript selbst unter `xpcall` aus (nur wenn `-l ljdap` die letzte Option
+  vor dem Skript ist, `run=0` schaltet ab); Lua 5.1 ruft das globale
+  `debug.traceback` (lua.c) → ljdap ersetzt es und erkennt per Schutztiefe
+  der pcall-Hüllen, ob der Fehler ungeschützt ist. Coroutine-Körper unter
+  LuaJIT unter `xpcall` (yield über xpcall erlaubt), unter 5.1 nicht möglich.
+  Agent-eigene Module halten das Original-`pcall` als lokale Variable.
 - **FFI-Callbacks:** Halt im Callback blockiert den C-Aufrufer (SDL/ImGui
   meist harmlos). Kein Verbot, Hinweis im README.
 
@@ -231,7 +245,11 @@ Platzhalter `json.null`, damit die Indizes stimmen.
 - **evaluate:** zuerst `"return " .. expr`, sonst als Anweisung; Umgebung per
   `setfenv` mit `__index` (Locals → Upvalues → fenv der Funktion → _G) und
   `__newindex` (setlocal/setupvalue). Varargs als `...` nicht direkt –
-  über Pseudovariable `vararg`.
+  über Pseudovariable `vararg`. **Umgesetzt (M3):** Schreibzugriffe werden
+  gesammelt und erst nach erfolgreichem Lauf zurückgeschrieben. Zugriff auf
+  Rahmen über Accessoren (laufender Thread per Markierungsfunktion, andere
+  Coroutinen per `debug.getinfo/getlocal(co, ebene)`); dort kein Tail Call
+  auf `debug.*` (LuaJIT ersetzt sonst den Rahmen der Hülle).
 
 ## 9 Pfade
 

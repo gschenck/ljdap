@@ -15,6 +15,8 @@
 --
 -- Fehlerkonvention: reine Funktionen, keine Fehler; unbekannte Quellen → nil.
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local M = {}
 
 local has_ffi, ffi = pcall(require, "ffi")

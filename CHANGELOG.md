@@ -9,6 +9,25 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 ## [Unreleased]
 
 ### Hinzugefügt
+- M3: Coroutinen als DAP-Threads (`ljdap.threads`): Hüllen um
+  `coroutine.create/wrap/resume`, Haltepunkte und Stepping in Coroutinen,
+  Stack und Variablen auch pausierter Coroutinen, Step über `yield`/`resume`
+  hinweg; unter Lua 5.1 Hook je Coroutine.
+- M3: `evaluate` (Watch, Hover, Konsole; Ausdruck oder Anweisung, Locals/
+  Upvalues/fenv, Schreiben zurück per `setlocal`/`setupvalue`, Pseudovariable
+  `vararg`) und `setVariable` (Locals, Varargs, Upvalues, Tabellenfelder)
+  (`ljdap.eval`).
+- M3: Halt bei Fehlern mit Filtern „nicht abgefangen“ (Standard) und „alle“
+  sowie `exceptionInfo` (`ljdap.errors`): `pcall`/`xpcall`-Hüllen, unter
+  LuaJIT Ausführung des Skripts unter `xpcall` bei `-l ljdap`, unter Lua 5.1
+  über `debug.traceback`, Coroutine-Körper unter LuaJIT.
+- M3: Bedingte Haltepunkte, Trefferzähler (`5`, `>5`, `>=5`, `%5` …),
+  Logpoints mit `{ausdruck}`, Pause.
+- M3: Rahmen ohne Funktionsnamen (aus C aufgerufen, z. B. per `pcall` oder
+  als Coroutine-Körper) heißen `datei.lua:Zeile`.
+- M3: Szenarien `tests/scenarios/test_m3.py`, Unit-Tests für eval,
+  Fehler-Hüllen und Threads; Sublime-Ende-zu-Ende-Test mit Fehler-Halt und
+  Haltepunkt in einer Coroutine.
 - Ein-Datei-Version `ljdap.lua` (vorgezogen aus M4): `tools/amalgamate.lua`
   erzeugt sie aus `src/ljdap/`, `--check` in der CI; Szenarien laufen auch
   gegen die Ein-Datei-Version (`LJDAP_SINGLE=1`).

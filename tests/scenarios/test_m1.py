@@ -27,7 +27,7 @@ def handshake(t, c, nulls, interp="luajit"):
                   nulls=["locale", "supportsVariableType"] if nulls else None)
     caps = r["body"]
     t.assertTrue(caps.get("supportsConfigurationDoneRequest"))
-    t.assertEqual(caps.get("exceptionBreakpointFilters"), [])
+    t.assertEqual([f["filter"] for f in caps.get("exceptionBreakpointFilters")], ["uncaught", "raised"])
     c.event("initialized")
     c.request("attach", attach_args(interp), nulls=["__restart", "host"] if nulls else None)
     out = c.event("output")["body"]["output"]

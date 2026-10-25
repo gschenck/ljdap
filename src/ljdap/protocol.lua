@@ -13,6 +13,8 @@
 --   ch:event(name, body)
 --   ch:close()
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local json = require("ljdap.json")
 local transport = require("ljdap.transport")
 

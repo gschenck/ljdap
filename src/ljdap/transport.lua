@@ -24,6 +24,8 @@
 --   f = transport.framer(); f:feed(daten); f:next() -> body | nil | nil, err
 --   transport.frame(body) -> "Content-Length: n\r\n\r\n" .. body
 
+local pcall = pcall -- Original; ljdap.errors ersetzt das globale pcall
+
 local M = {}
 
 local SEND_TIMEOUT_MS = 10000
