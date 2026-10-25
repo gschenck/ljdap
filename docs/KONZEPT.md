@@ -1,6 +1,6 @@
 # ljdap – Konzept
 
-Stand 2026-10-25 (M0, fortgeschrieben nach Recherche, siehe 15). Ein DAP-Server (Debug Adapter Protocol) in reinem Lua für
+Stand 2026-10-25 (M0 abgenommen, fortgeschrieben für M1, siehe 15). Ein DAP-Server (Debug Adapter Protocol) in reinem Lua für
 LuaJIT, der in das zu untersuchende Programm geladen wird. Bedienoberfläche
 ist ein beliebiger DAP-Client: Sublime Text (Paket „Debugger“), VS Code,
 später ein F7Cmdr-Frontend.
@@ -132,6 +132,12 @@ Regel: Entwicklung in `src/`, das eingecheckte `ljdap.lua` wird nur durch
   und Hook in jeder neuen Coroutine setzen; DAP-Thread-ID je Coroutine
   (schwache Tabelle). Haupt-Coroutine = Thread 1. Stop in Coroutine zeigt
   deren Stack.
+  Zusätzlich `coroutine.resume` umhüllen: Hook beim ersten Resume einer
+  noch unbekannten Coroutine nachsetzen. So werden auch Coroutinen erfasst,
+  die vor dem Laden von ljdap bzw. vor dem Verbinden entstanden sind
+  (Lehre aus huanzai/lua-debug). Grenze: Code, der `coroutine.resume`/`wrap`
+  vor dem Laden von ljdap in eine lokale Variable kopiert hat, wird nicht
+  erreicht → README empfiehlt `-l ljdap` beim Start.
 - **Haltschleife:** Im Hook blockierend auf Requests warten (stackTrace,
   variables, evaluate, continue …), danach zurückkehren. Agentenframes aus
   dem Stack ausblenden (Ebenen-Offset ermitteln, nicht hart codieren).
@@ -166,6 +172,13 @@ ExceptionInfoRequest (optional).
 Haltepunkt-Verifikation: Zeilen ohne Code (Kommentar, Leerzeile) auf nächste
 gültige Zeile schieben, sobald die Funktion geladen ist
 (`debug.getinfo(f, "L").activelines`); bis dahin „unverified“.
+ljdap prüft Haltepunkte selbst und verlangt kein `sourceContent` (das ist
+eine Eigenheit von actboy168/lua-debug, kein DAP-Standard).
+
+Robustheit gegenüber Clients: Optionale Felder können als JSON-`null`
+kommen (Sublime-Debugger); `null` und „fehlt“ werden gleich behandelt. Der
+JSON-Dekodierer lässt `null` in Objekten weg, in Arrays bleibt der
+Platzhalter `json.null`, damit die Indizes stimmen.
 
 ## 8 Variablen und Auswertung
 
@@ -220,6 +233,11 @@ gültige Zeile schieben, sobald die Funktion geladen ist
   über Funktionsgrenzen und Tail calls, Coroutine-Halt, bedingter Haltepunkt,
   Logpoint, Fehler-Halt (uncaught/raised), evaluate/setVariable, Pause in
   Endlosschleife, Trennen und Wiederverbinden, Programmende.
+- Client-Verhalten nachbilden: Der Testclient kann wie Sublime optionale
+  Felder als `null` senden (Schalter je Szenario); mindestens je ein
+  Szenario läuft in beiden Varianten.
+- Coroutine-Szenario: Coroutine vor dem Verbinden erzeugt, Haltepunkt darin
+  nach dem Verbinden.
 - Windows: luajit.exe (MinGW) unter Wine, gleiche Szenarien.
 - Leistung: Messskript, Laufzeit ohne Client / mit Client ohne Haltepunkt /
   mit Haltepunkt in anderer Datei; Ziel (Annahme) ≤ 1,2× bzw. ≤ 3×
@@ -255,6 +273,11 @@ gültige Zeile schieben, sobald die Funktion geladen ist
 - Tail calls: fehlende Frames im Stack, Step-out-Tiefe.
 - Programme mit eigenem `debug.sethook` (Profiler) kollidieren – erkennen und
   warnen.
+- Idee für später: Agentenzustand (JSON, Transport, Protokoll) in einem
+  eigenen `lua_State` per FFI (`luaL_newstate`), wie bei actboy168/lua-debug
+  der „luadbg“-Zustand. Vorteil: GC, JIT und Fehler des Agenten berühren das
+  Programm nicht. Die Hooks und die Inspektion müssen trotzdem im Zustand
+  des Programms laufen. Nicht in v1.
 
 ## 14 Start der Sitzung (erledigt mit M0, zur Nachvollziehbarkeit)
 
@@ -338,3 +361,14 @@ class Ljdap(dap.Adapter):
 | git, gh | vorhanden |
 | Wine, MinGW | fehlen, in M1 nachinstallieren |
 
+
+### 15.4 Vergleich mit huanzai/lua-debug (Fork von actboy168/lua-debug)
+
+- Nativ (C++-Modul `luadebug` mit eigenem Lua-Zustand, Frontend-Prozess
+  `lua-debug.exe`, DLL-Injektion für Anhängen); LuaJIT-Anbindung über
+  Interna (`lj_obj.h`, `lj_frame.h` …), gebaut gegen fesily/luajit2.
+  Passt nicht zu den Zielen „eine Datei, keine C-DLL, eigene statische
+  Binaries“. Fork seit 2024-11 ohne Pflege, 116 Commits hinter dem Original.
+- Übernommen: null-Toleranz (7), kein `sourceContent` (7),
+  `coroutine.resume`-Umhüllung für spät erfasste Coroutinen (6),
+  eigener Agentenzustand als Idee (13).
