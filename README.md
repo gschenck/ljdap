@@ -72,8 +72,9 @@ Unter Lua 5.1 gibt es diese Einschränkung nicht.
 1. Paket **Debugger** (daveleroy) über Package Control installieren
    (Sublime Text ≥ Build 4199).
 2. Den Ordner `editors/sublime/` als `Packages/ljdap/` kopieren
-   (*Preferences → Browse Packages…*). Die Datei `.python-version` gehört
-   dazu: das Debugger-Paket läuft im Python-3.8-Plugin-Host.
+   (*Preferences → Browse Packages…*). Die Datei `.python-version` (`3.8`)
+   gehört dazu: Plugin und Debugger-Paket müssen im selben Plugin-Host
+   laufen (ab Build 4200 ist das Python 3.14, das `3.8` übernimmt).
 3. Im `.sublime-project` eine Konfiguration anlegen (Vorlage:
    `editors/sublime/ljdap.sublime-project.example`, oder *Debugger: Add
    Configuration* → *ljdap*):
@@ -125,6 +126,10 @@ Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
 - Sublime-Plugin: `python3 -m unittest discover -s tests/editors -v`
   (mit `SUBLIME_DEBUGGER_SRC=<Klon von SublimeDebugger>` zusätzlich Prüfung
   der genutzten internen API).
+- Ende-zu-Ende mit echtem Sublime Text (ohne Bildschirm, Xvfb):
+  `SUBLIME_TEXT=…/sublime_text SUBLIME_DEBUGGER_SRC=… python3 tests/editors/e2e_sublime.py`
+  – setzt Haltepunkt, steppt, prüft Zustand im Debugger-Paket und den
+  DAP-Mitschnitt; mit `LJDAP_E2E_SHOTS=<ordner>` zusätzlich Bildschirmfotos.
 - Szenarien mit echtem DAP-Client: `python3 -m unittest discover -s tests/scenarios -v`;
   andere Interpreter über `LJDAP_INTERPS="luajit;lua5.1;wine /pfad/luajit.exe"`.
 - CI: Linux (luajit, lua5.1), Windows-LuaJIT (MinGW) unter Wine und auf

@@ -302,7 +302,7 @@ local function frame_of(info, k)
   elseif not name then name = "?" end
   local f = { id = k + 1, name = name, line = 0, column = 0 }
   if info.what == "C" then
-    f.name = "[C] " .. (info.name or "?")
+    f.name = info.name and ("[C] " .. info.name) or "[C]"
     f.presentationHint = "subtle"
     return f
   end

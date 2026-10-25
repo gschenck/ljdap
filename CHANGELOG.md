@@ -24,6 +24,9 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 - M2: Sublime-Text-Plugin `editors/sublime/` für das Paket „Debugger“ mit
   Konfigurationsvorlage und Schema; Tests mit nachgebildetem Paket und
   Prüfung der internen API am echten Quelltext.
+- M2: Ende-zu-Ende-Test mit echtem Sublime Text 4215 und Paket Debugger
+  ohne Bildschirm (`tests/editors/e2e_sublime.py`, Testtreiber
+  `tests/editors/sublime_e2e/`).
 - M2: Hooks (`ljdap.hooks`): Zeilen-Hook mit Vorfilter nur bei
   Haltepunkten/Stepping, sonst nur Count-Hook (gemessen günstiger als
   Call/Return-Hooks, siehe Konzept 6); Messskript `tests/perf/bench.py`.
