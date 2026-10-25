@@ -53,7 +53,13 @@ class Sublime:
         open(os.path.join(self.dir, "cmd.jsonl"), "w").close()
         self.seq = 0
         self.xvfb = None
-        env = dict(os.environ, HOME=self.home, LJDAP_E2E_DIR=self.dir)
+        # XDG_CONFIG_HOME ausdrücklich setzen: GitHub-Runner setzen es auf das
+        # echte Home, Sublime würde dann dort nach Paketen suchen
+        env = dict(os.environ, HOME=self.home, LJDAP_E2E_DIR=self.dir,
+                   XDG_CONFIG_HOME=os.path.join(self.home, ".config"),
+                   XDG_DATA_HOME=os.path.join(self.home, ".local", "share"),
+                   XDG_CACHE_HOME=os.path.join(self.home, ".cache"))
+        self.packages = pk
         self.display = env.get("DISPLAY")
         if not env.get("DISPLAY"):
             disp = ":%d" % (90 + os.getpid() % 9)
@@ -79,7 +85,16 @@ class Sublime:
             if any(r["id"] == 0 for r in self.results()):
                 return
             time.sleep(0.2)
-        raise Fail("Testtreiber in Sublime nicht geladen")
+        state = "läuft" if self.p.poll() is None else f"beendet ({self.p.returncode})"
+        try:
+            with open(os.path.join(self.work, "sublime.log"), encoding="utf-8", errors="replace") as f:
+                log = f.read()[-1500:]
+        except OSError:
+            log = ""
+        data = os.path.dirname(self.packages)
+        listing = sorted(os.listdir(data)) if os.path.isdir(data) else []
+        raise Fail(f"Testtreiber in Sublime nicht geladen; Sublime {state}; "
+                   f"Datenverzeichnis {listing}; Ausgabe: {log!r}")
 
     def cmd(self, action, timeout=20, **kw):
         self.seq += 1
