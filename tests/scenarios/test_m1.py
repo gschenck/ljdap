@@ -167,23 +167,6 @@ class M1(unittest.TestCase):
                 finally:
                     prog.kill()
 
-    def test_launch_is_rejected_in_m1(self):
-        for interp in INTERPS:
-            with self.subTest(interp=interp):
-                prog = Program(interp, "port={port},wait=1", args=["0"])
-                try:
-                    c = prog.client()
-                    c.request("initialize", {"adapterID": "ljdap"})
-                    r = c.request("launch", {"program": "x.lua"}, ok=False)
-                    self.assertFalse(r["success"])
-                    self.assertIn("attach", r["message"])
-                    c.request("attach", {})
-                    c.request("configurationDone")
-                    code, _, err = prog.finish()
-                    self.assertEqual(code, 0, err)
-                finally:
-                    prog.kill()
-
     def test_port_in_use_program_runs_without_debugger(self):
         for interp in INTERPS:
             with self.subTest(interp=interp):

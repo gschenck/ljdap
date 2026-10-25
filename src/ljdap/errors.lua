@@ -30,6 +30,7 @@ local is_luajit = jit ~= nil
 E.is_luajit = is_luajit
 
 E.on_error = nil
+E.on_exit = nil   -- function(code): Programmende in run_script (Session meldet exited)
 
 local function notify(err, kind, marker)
   local cb = E.on_error
@@ -182,28 +183,59 @@ local function error_text(err)
 end
 E.error_text = error_text
 
---- LuaJIT bei `-l ljdap`: führt das Skript unter xpcall aus und beendet den
--- Prozess wie luajit.c (Rückgabe 0 bzw. 1 mit Traceback auf stderr).
+-- Agentenzeilen am Ende eines Tracebacks (run_script, Starter, xpcall)
+-- entfernen: alles nach der letzten Zeile mit Benutzercode, sofern danach
+-- nur noch Agenten- oder C-Zeilen folgen.
+local function agent_line(l)
+  return l:find("ljdap%.lua:") or l:find("ljdap[/\\][%w_]+%.lua:")
+end
+function E.trim_traceback(tb)
+  local lines = {}
+  for l in (tb .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = l end
+  local last = #lines
+  for i = #lines, 1, -1 do
+    local l = lines[i]
+    if l:find("^stack traceback:") then break end
+    if l:find("^%s*%[C%]") or l:find("^%s*%(tail call%)") or agent_line(l) then
+      last = i - 1
+    else
+      break
+    end
+  end
+  return table.concat(lines, "\n", 1, last)
+end
+
+local function finish_exit(code)
+  if E.on_exit then orig_pcall(E.on_exit, code) end
+  io.stdout:flush()
+  io.stderr:flush()
+  os.exit(code, true)
+end
+
+--- Führt das Skript unter xpcall aus und beendet den Prozess wie luajit.c
+-- bzw. lua.c (Rückgabe 0 bzw. 1 mit Traceback auf stderr). Genutzt bei
+-- `luajit -l ljdap skript.lua` (LuaJIT) und im Starter-Modus
+-- `lua ljdap.lua [optionen] skript.lua` (beide Interpreter).
 function E.run_script(path, args, progname)
   local fn, err = loadfile(path)
   if not fn then
     io.stderr:write(progname, ": ", tostring(err), "\n")
-    io.stderr:flush()
-    os.exit(1, true)
+    finish_exit(1)
   end
   local h
   h = function(e)
     notify(e, "uncaught", h)
-    return orig_traceback(error_text(e), 2)
+    -- kein Tail Call (LuaJIT ersetzt sonst diesen Rahmen, Ebene 2 stimmt nicht)
+    local tb = orig_traceback(error_text(e), 2)
+    return E.trim_traceback(tb)
   end
   local ok, res = orig_xpcall(function() return fn(unpack(args, 1, args.n)) end, h)
   io.stdout:flush()
   if not ok then
     io.stderr:write(progname, ": ", tostring(res), "\n")
-    io.stderr:flush()
-    os.exit(1, true)
+    finish_exit(1)
   end
-  os.exit(0, true)
+  finish_exit(0)
 end
 
 return E

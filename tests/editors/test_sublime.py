@@ -11,6 +11,7 @@ import asyncio
 import importlib.util
 import os
 import sys
+import tempfile
 import types
 import unittest
 from dataclasses import dataclass
@@ -42,6 +43,11 @@ def make_fake_debugger():
         host: str = "localhost"
         port: int = 0
         timeout: int = 5
+        command: list = None
+        cwd: str = None
+        env: dict = None
+        stdout: object = None
+        stderr: object = None
 
     dap = types.ModuleType("Debugger.modules.dap")
     dap.Adapter, dap.AdapterInstaller, dap.SocketTransport = Adapter, AdapterInstaller, SocketTransport
@@ -63,7 +69,12 @@ class SublimePlugin(unittest.TestCase):
 
     def setUp(self):
         self.saved = dict(sys.modules)
-        sys.modules["sublime"] = types.ModuleType("sublime")
+        self.cache = tempfile.mkdtemp()
+        sub = types.ModuleType("sublime")
+        sub.cache_path = lambda: self.cache
+        self.resource = b"-- ljdap.lua (Test)\n"
+        sub.load_binary_resource = lambda name: self.resource if name == "Packages/ljdap/ljdap.lua" else None
+        sys.modules["sublime"] = sub
 
     def tearDown(self):
         sys.modules.clear()
@@ -80,12 +91,55 @@ class SublimePlugin(unittest.TestCase):
         self.assertEqual(ad.installer.installed_version(), mod.VERSION)
         snip = ad.installer.configuration_snippets()
         self.assertEqual(snip[0]["body"]["type"], "ljdap")
-        self.assertEqual(snip[0]["body"]["request"], "attach")
+        self.assertEqual([x["body"]["request"] for x in snip], ["launch", "attach"])
         self.assertIn("attach", ad.installer.configuration_schema())
         t = asyncio.run(ad.start(None, {"port": "5000"}))
         self.assertEqual((t.host, t.port, t.timeout), ("127.0.0.1", 5000, 5))
         t = asyncio.run(ad.start(None, {"host": "10.0.0.2", "port": 4712, "timeout": 9}))
         self.assertEqual((t.host, t.port, t.timeout), ("10.0.0.2", 4712, 9))
+
+    def test_launch(self):
+        fake, registry = make_fake_debugger()
+        sys.modules.update(fake)
+        mod = load_plugin()
+        mod.plugin_loaded()
+        ad = registry["ljdap"]
+        self.assertIn("launch", ad.installer.configuration_schema())
+        self.assertEqual(ad.installer.configuration_snippets()[0]["body"]["request"], "launch")
+
+        class Console:
+            def __init__(self):
+                self.lines = []
+
+            def log(self, kind, text):
+                self.lines.append((kind, text))
+
+        con = Console()
+        cfg = {"request": "launch", "program": "/p/skript.lua", "args": ["a", 2], "lua": "lua5.1",
+               "env": {"X": "1"}, "cwd": "/p"}
+        t = asyncio.run(ad.start(con, cfg))
+        cached = os.path.join(self.cache, "ljdap", "ljdap.lua")
+        with open(cached, "rb") as f:
+            self.assertEqual(f.read(), self.resource, "ljdap.lua aus dem Paket in den Cache")
+        self.assertEqual(t.command[:3], ["lua5.1", cached, "--port"])
+        self.assertEqual(t.command[4:], ["/p/skript.lua", "a", "2"])
+        self.assertEqual(int(t.command[3]), t.port)
+        self.assertGreater(t.port, 0)
+        self.assertEqual((t.host, t.cwd), ("127.0.0.1", "/p"))
+        self.assertEqual(t.env["X"], "1")
+        self.assertIn("PATH", t.env, "Umgebung ergänzt, nicht ersetzt")
+        t.stdout("hallo")
+        self.assertEqual(con.lines, [("stdout", "hallo")])
+        # eigener Pfad zu ljdap.lua, ohne env
+        t = asyncio.run(ad.start(con, {"request": "launch", "program": "x.lua", "ljdap": "/opt/ljdap.lua",
+                                       "port": 4999}))
+        self.assertEqual(t.command, ["luajit", "/opt/ljdap.lua", "--port", "4999", "x.lua"])
+        self.assertIsNone(t.env)
+        # ohne Paketinhalt und ohne Feld "ljdap": verständlicher Fehler
+        self.resource = None
+        with self.assertRaises(Exception) as cm:
+            asyncio.run(ad.start(con, {"request": "launch", "program": "x.lua"}))
+        self.assertIn("ljdap.lua", str(cm.exception))
 
     def test_without_debugger_package(self):
         mod = load_plugin()
@@ -126,7 +180,8 @@ class RealDebuggerApi(unittest.TestCase):
         tree = self.parse("modules/dap/transports.py")
         cls = next(n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == "SocketTransport")
         fields = {n.target.id for n in cls.body if isinstance(n, ast.AnnAssign)}
-        self.assertTrue({"host", "port", "timeout"} <= fields, fields)
+        self.assertTrue({"host", "port", "timeout", "command", "cwd", "env", "stdout", "stderr"} <= fields,
+                        fields)
 
     def test_installer_methods(self):
         tree = self.parse("modules/dap/adapter_installer.py")

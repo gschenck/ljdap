@@ -2246,6 +2246,7 @@ local is_luajit = jit ~= nil
 E.is_luajit = is_luajit
 
 E.on_error = nil
+E.on_exit = nil   -- function(code): Programmende in run_script (Session meldet exited)
 
 local function notify(err, kind, marker)
   local cb = E.on_error
@@ -2398,28 +2399,59 @@ local function error_text(err)
 end
 E.error_text = error_text
 
---- LuaJIT bei `-l ljdap`: führt das Skript unter xpcall aus und beendet den
--- Prozess wie luajit.c (Rückgabe 0 bzw. 1 mit Traceback auf stderr).
+-- Agentenzeilen am Ende eines Tracebacks (run_script, Starter, xpcall)
+-- entfernen: alles nach der letzten Zeile mit Benutzercode, sofern danach
+-- nur noch Agenten- oder C-Zeilen folgen.
+local function agent_line(l)
+  return l:find("ljdap%.lua:") or l:find("ljdap[/\\][%w_]+%.lua:")
+end
+function E.trim_traceback(tb)
+  local lines = {}
+  for l in (tb .. "\n"):gmatch("(.-)\n") do lines[#lines + 1] = l end
+  local last = #lines
+  for i = #lines, 1, -1 do
+    local l = lines[i]
+    if l:find("^stack traceback:") then break end
+    if l:find("^%s*%[C%]") or l:find("^%s*%(tail call%)") or agent_line(l) then
+      last = i - 1
+    else
+      break
+    end
+  end
+  return table.concat(lines, "\n", 1, last)
+end
+
+local function finish_exit(code)
+  if E.on_exit then orig_pcall(E.on_exit, code) end
+  io.stdout:flush()
+  io.stderr:flush()
+  os.exit(code, true)
+end
+
+--- Führt das Skript unter xpcall aus und beendet den Prozess wie luajit.c
+-- bzw. lua.c (Rückgabe 0 bzw. 1 mit Traceback auf stderr). Genutzt bei
+-- `luajit -l ljdap skript.lua` (LuaJIT) und im Starter-Modus
+-- `lua ljdap.lua [optionen] skript.lua` (beide Interpreter).
 function E.run_script(path, args, progname)
   local fn, err = loadfile(path)
   if not fn then
     io.stderr:write(progname, ": ", tostring(err), "\n")
-    io.stderr:flush()
-    os.exit(1, true)
+    finish_exit(1)
   end
   local h
   h = function(e)
     notify(e, "uncaught", h)
-    return orig_traceback(error_text(e), 2)
+    -- kein Tail Call (LuaJIT ersetzt sonst diesen Rahmen, Ebene 2 stimmt nicht)
+    local tb = orig_traceback(error_text(e), 2)
+    return E.trim_traceback(tb)
   end
   local ok, res = orig_xpcall(function() return fn(unpack(args, 1, args.n)) end, h)
   io.stdout:flush()
   if not ok then
     io.stderr:write(progname, ": ", tostring(res), "\n")
-    io.stderr:flush()
-    os.exit(1, true)
+    finish_exit(1)
   end
-  os.exit(0, true)
+  finish_exit(0)
 end
 
 return E
@@ -2820,6 +2852,7 @@ function handlers.initialize(req)
     supportsSetVariable = true,
     supportsEvaluateForHovers = true,
     supportsExceptionInfoRequest = true,
+    supportsTerminateRequest = true,
     exceptionBreakpointFilters = {
       { filter = "uncaught", label = "Nicht abgefangene Fehler", default = true,
         description = "Hält, wenn ein Fehler das Programm (oder eine Coroutine) beenden würde" },
@@ -2832,6 +2865,7 @@ end
 
 function handlers.attach(req)
   local args = req.arguments or {}
+  S.launched = req.command == "launch"
   S.mapper = paths.mapper(S.cwd, args.pathMappings)
   S.stop_on_entry = args.stopOnEntry == true
   S.ch:respond(req, json.object())
@@ -2843,8 +2877,11 @@ function handlers.attach(req)
   end
 end
 
+-- launch: Das Programm läuft bereits (vom Editor gestartet, typisch über
+-- den Starter-Modus `lua ljdap.lua --port … skript.lua`); ljdap verhält sich
+-- wie bei attach, beendet das Programm aber beim Trennen (Stopp-Knopf).
 function handlers.launch(req)
-  S.ch:fail(req, "launch wird erst im Starter-Modus unterstützt (geplant M4); bitte attach verwenden")
+  handlers.attach(req)
 end
 
 function handlers.setBreakpoints(req)
@@ -2985,8 +3022,11 @@ function handlers.stackTrace(req)
       end
     end
   end
-  -- C-Rahmen am Boden (Interpreter, Agent-Aufrufer) abschneiden
-  while #list > 1 and list[#list].info and list[#list].info.what == "C" do list[#list] = nil end
+  -- C- und Tail-Call-Rahmen am Boden (Interpreter, Agent-Aufrufer) abschneiden
+  while #list > 1 and list[#list].info
+    and (list[#list].info.what == "C" or list[#list].info.what == "tail") do
+    list[#list] = nil
+  end
   local frames = json.array()
   for i = first + 1, math.min(#list, first + levels) do
     local e = list[i]
@@ -3211,10 +3251,36 @@ local function drop_client()
   update_exc()
 end
 
-function handlers.disconnect(req)
-  -- terminateDebuggee wird nicht ausgewertet: das Programm läuft weiter
-  S.ch:respond(req, json.object())
+local function terminate_program()
+  if S.ch then S.ch:event("terminated", json.object()) end
   drop_client()
+  if S.server then S.server:close() end
+  io.stdout:flush()
+  os.exit(1, true)
+end
+
+-- disconnect: Programm läuft weiter, außer terminateDebuggee = true oder
+-- (bei launch) nicht ausdrücklich false.
+function handlers.disconnect(req)
+  local args = req.arguments or {}
+  local kill = args.terminateDebuggee == true or (S.launched and args.terminateDebuggee ~= false)
+  S.ch:respond(req, json.object())
+  if kill then terminate_program() end
+  drop_client()
+end
+
+function handlers.terminate(req)
+  S.ch:respond(req, json.object())
+  terminate_program()
+end
+
+-- Programmende (aus ljdap.errors.run_script): Client informieren.
+local function on_exit(code)
+  if S.ch then
+    S.ch:event("exited", { exitCode = code })
+    S.ch:event("terminated", json.object())
+    S.ch:close()
+  end
 end
 
 local function dispatch(msg)
@@ -3331,6 +3397,7 @@ end
 hooks.init(on_line, M.poll)
 hooks.set_threads(threads.each)
 errors.on_error = on_error
+errors.on_exit = on_exit
 
 ------------------------------------------------------------------------
 -- Öffentlich
@@ -3428,6 +3495,7 @@ end
 -- ljdap – DAP-Server in reinem Lua für LuaJIT 2.1 und Lua 5.1.
 --
 -- Einbindung:
+--   luajit ljdap.lua [optionen] skript.lua      Starter-Modus (Editor-launch)
 --   luajit -l ljdap skript.lua                  startet mit Vorgaben bzw. LJDAP
 --   LJDAP="port=4711,wait=1" luajit -l ljdap skript.lua
 --   local dbg = require("ljdap"); dbg.start{ port = 4711, wait = true }
@@ -3490,12 +3558,83 @@ local function takeover(opt)
   require("ljdap.errors").run_script(arg[0], args, progname)
 end
 
-local env = os.getenv("LJDAP")
-local dash_l = loaded_by_dash_l()
-if env or dash_l then
-  local opt = session.parse_env(env)
+------------------------------------------------------------------------
+-- Starter-Modus: lua ljdap.lua [optionen] skript.lua [args…]
+------------------------------------------------------------------------
+
+local USAGE = [[
+Aufruf: luajit ljdap.lua [optionen] skript.lua [argumente…]
+  --port N      TCP-Port (Vorgabe 4711)
+  --host ADR    IPv4-Adresse (Vorgabe 127.0.0.1)
+  --nowait      nicht auf den Editor warten (Vorgabe: warten bis configurationDone)
+  --jit off     JIT ausschalten
+  --log DATEI   DAP-Mitschnitt
+  --version     Version ausgeben
+  --help        diese Hilfe
+Startet das Skript unter dem Debugger; der Editor verbindet sich per
+attach oder launch (der Sublime-/VS-Code-Adapter ruft dies selbst auf).]]
+
+-- Wird diese Datei als Skript ausgeführt (nicht per require/-l)? Dann ist
+-- das erste Vararg ein Kommandozeilenargument statt des Modulnamens.
+local function run_starter(...)
+  local argv = { ... }
+  local opt = { wait = true }
+  local i = 1
+  while argv[i] do
+    local a = argv[i]
+    if a == "--port" then i = i + 1; opt.port = tonumber(argv[i])
+    elseif a == "--host" then i = i + 1; opt.host = argv[i]
+    elseif a == "--nowait" then opt.wait = false
+    elseif a == "--wait" then opt.wait = true
+    elseif a == "--jit" then i = i + 1; opt.jit = argv[i]
+    elseif a == "--log" then i = i + 1; opt.log = argv[i]
+    elseif a == "--version" then io.stdout:write("ljdap ", M.VERSION, "\n"); os.exit(0)
+    elseif a == "--help" or a == "-h" then io.stdout:write(USAGE, "\n"); os.exit(0)
+    elseif a == "--" then i = i + 1; break
+    elseif a:sub(1, 2) == "--" then
+      io.stderr:write("ljdap: unbekannte Option ", a, "\n", USAGE, "\n"); os.exit(2)
+    else break end
+    i = i + 1
+  end
+  local script = argv[i]
+  if not script then
+    io.stderr:write("ljdap: kein Skript angegeben\n", USAGE, "\n")
+    os.exit(2)
+  end
+  -- arg wie lua.c/luajit.c es dem Skript gäbe: arg[0] = Skript, davor
+  -- Interpreter, ljdap.lua und Optionen. Ausdrücklich _G.arg: in einer
+  -- Vararg-Funktion ist `arg` unter Lua 5.1 die implizite lokale Tabelle
+  -- der Varargs (LUA_COMPAT_VARARG).
+  local old = type(_G.arg) == "table" and _G.arg or {}
+  local newarg, args = {}, { n = 0 }
+  local lowest = 0
+  while old[lowest - 1] ~= nil do lowest = lowest - 1 end
+  local shift = i -- Skript steht bei argv[i] = old[i]
+  for k = lowest, #argv do newarg[k - shift] = old[k] end
+  for k = i + 1, #argv do args.n = args.n + 1; args[args.n] = argv[k] end
+  _G.arg = newarg
+  package.loaded["ljdap"] = M
   M.start(opt)
-  if dash_l then takeover(opt) end
+  require("ljdap.errors").run_script(script, args, old[lowest] or "lua")
+end
+
+-- Unterscheidung über das erste Vararg: require und -l übergeben den
+-- Modulnamen "ljdap"; als Skript gestartet ist es ein Kommandozeilenargument
+-- (die Stack-Prüfung von loaded_by_dash_l sieht in beiden Fällen C).
+local modname = ...
+local starter = modname ~= "ljdap" and type(_G.arg) == "table" and type(_G.arg[0]) == "string"
+  and _G.arg[0]:match("ljdap%.lua$") ~= nil
+
+if starter then
+  run_starter(...)
+else
+  local env = os.getenv("LJDAP")
+  local dash_l = modname == "ljdap" and loaded_by_dash_l()
+  if env or dash_l then
+    local opt = session.parse_env(env)
+    M.start(opt)
+    if dash_l then takeover(opt) end
+  end
 end
 
 return M

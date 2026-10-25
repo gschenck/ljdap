@@ -392,6 +392,7 @@ function handlers.initialize(req)
     supportsSetVariable = true,
     supportsEvaluateForHovers = true,
     supportsExceptionInfoRequest = true,
+    supportsTerminateRequest = true,
     exceptionBreakpointFilters = {
       { filter = "uncaught", label = "Nicht abgefangene Fehler", default = true,
         description = "Hält, wenn ein Fehler das Programm (oder eine Coroutine) beenden würde" },
@@ -404,6 +405,7 @@ end
 
 function handlers.attach(req)
   local args = req.arguments or {}
+  S.launched = req.command == "launch"
   S.mapper = paths.mapper(S.cwd, args.pathMappings)
   S.stop_on_entry = args.stopOnEntry == true
   S.ch:respond(req, json.object())
@@ -415,8 +417,11 @@ function handlers.attach(req)
   end
 end
 
+-- launch: Das Programm läuft bereits (vom Editor gestartet, typisch über
+-- den Starter-Modus `lua ljdap.lua --port … skript.lua`); ljdap verhält sich
+-- wie bei attach, beendet das Programm aber beim Trennen (Stopp-Knopf).
 function handlers.launch(req)
-  S.ch:fail(req, "launch wird erst im Starter-Modus unterstützt (geplant M4); bitte attach verwenden")
+  handlers.attach(req)
 end
 
 function handlers.setBreakpoints(req)
@@ -557,8 +562,11 @@ function handlers.stackTrace(req)
       end
     end
   end
-  -- C-Rahmen am Boden (Interpreter, Agent-Aufrufer) abschneiden
-  while #list > 1 and list[#list].info and list[#list].info.what == "C" do list[#list] = nil end
+  -- C- und Tail-Call-Rahmen am Boden (Interpreter, Agent-Aufrufer) abschneiden
+  while #list > 1 and list[#list].info
+    and (list[#list].info.what == "C" or list[#list].info.what == "tail") do
+    list[#list] = nil
+  end
   local frames = json.array()
   for i = first + 1, math.min(#list, first + levels) do
     local e = list[i]
@@ -783,10 +791,36 @@ local function drop_client()
   update_exc()
 end
 
-function handlers.disconnect(req)
-  -- terminateDebuggee wird nicht ausgewertet: das Programm läuft weiter
-  S.ch:respond(req, json.object())
+local function terminate_program()
+  if S.ch then S.ch:event("terminated", json.object()) end
   drop_client()
+  if S.server then S.server:close() end
+  io.stdout:flush()
+  os.exit(1, true)
+end
+
+-- disconnect: Programm läuft weiter, außer terminateDebuggee = true oder
+-- (bei launch) nicht ausdrücklich false.
+function handlers.disconnect(req)
+  local args = req.arguments or {}
+  local kill = args.terminateDebuggee == true or (S.launched and args.terminateDebuggee ~= false)
+  S.ch:respond(req, json.object())
+  if kill then terminate_program() end
+  drop_client()
+end
+
+function handlers.terminate(req)
+  S.ch:respond(req, json.object())
+  terminate_program()
+end
+
+-- Programmende (aus ljdap.errors.run_script): Client informieren.
+local function on_exit(code)
+  if S.ch then
+    S.ch:event("exited", { exitCode = code })
+    S.ch:event("terminated", json.object())
+    S.ch:close()
+  end
 end
 
 local function dispatch(msg)
@@ -903,6 +937,7 @@ end
 hooks.init(on_line, M.poll)
 hooks.set_threads(threads.each)
 errors.on_error = on_error
+errors.on_exit = on_exit
 
 ------------------------------------------------------------------------
 -- Öffentlich

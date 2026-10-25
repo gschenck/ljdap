@@ -53,6 +53,7 @@ class Sublime:
             shutil.copy(package, os.path.join(inst, "ljdap.sublime-package"))
         else:
             shutil.copytree(os.path.join(ROOT, "editors", "sublime"), os.path.join(pk, "ljdap"))
+            shutil.copy(os.path.join(ROOT, "ljdap.lua"), os.path.join(pk, "ljdap", "ljdap.lua"))
         shutil.copytree(os.path.join(HERE, "sublime_e2e"), os.path.join(pk, "ljdap_e2e"))
         with open(os.path.join(pk, "User", "Preferences.sublime-settings"), "w") as f:
             json.dump({"update_check": False, "hot_exit": "disabled",
@@ -280,6 +281,26 @@ def run_m3(interp, exe, debugger_src):
         out, err = prog.communicate(timeout=30)
         if b"coro: 39" not in out:
             raise Fail(f"coro.lua falsch beendet: {out!r} {err!r}")
+
+        # 3. launch: Sublime startet `lua ljdap.lua --port … steps.lua` selbst
+        st.cmd("breakpoint", file=STEPS, line=13)
+        st.cmd("start", configuration={"name": "ljdap: Skript", "type": "ljdap", "request": "launch",
+                                       "program": STEPS, "cwd": ROOT, "lua": interp.split()[0],
+                                       "log": proto})
+        s = st.wait_state(paused_at("rechne", 13), "launch: Haltepunkt rechne:13")
+        report["launch"] = (s["frame"]["name"], s["frame"]["line"])
+        st.screenshot(tag + "-3-launch")
+        st.cmd("breakpoint", file=STEPS, line=13)
+        st.cmd("debugger", debugger_action="continue")
+        st.wait_state(lambda x: not x.get("session") or x.get("state_name") == "STOPPED", "Sitzungsende launch")
+        exited = None
+        with open(proto, encoding="utf-8") as f:
+            for line in f:
+                if '"event":"exited"' in line:
+                    exited = json.loads(line.split(" ", 2)[2])["body"]["exitCode"]
+        if exited != 0:
+            raise Fail(f"launch: exited-Event mit Code 0 erwartet, erhalten {exited}")
+        report["launch_exit"] = exited
 
         fails, exc_filters = [], None
         with open(proto, encoding="utf-8") as f:

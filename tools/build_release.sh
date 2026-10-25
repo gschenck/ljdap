@@ -19,6 +19,7 @@ cp ljdap.lua dist/ljdap.lua
 cp editors/sublime/ljdap_adapter.py editors/sublime/.python-version \
    editors/sublime/ljdap.sublime-project.example dist/stage/ljdap/
 cp LICENSE dist/stage/ljdap/LICENSE
+cp ljdap.lua dist/stage/ljdap/ljdap.lua   # für launch (Starter-Modus)
 (cd dist/stage && zip -qrX "../ljdap-sublime-$V.zip" ljdap)
 (cd dist/stage/ljdap && zip -qrX ../../ljdap.sublime-package .)
 rm -rf dist/stage

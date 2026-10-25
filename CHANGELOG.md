@@ -9,6 +9,17 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 ## [Unreleased]
 
 ### Hinzugefügt
+- M4: Starter-Modus `lua ljdap.lua [--port N] [--host A] [--nowait] [--log D]
+  [--jit off] skript.lua args…` mit `--version`/`--help`; `arg` und `...`
+  wie beim Interpreter; das Skript läuft unter `xpcall`, damit hält
+  „nicht abgefangen“ auch unter Lua 5.1 am Fehlerort; Traceback ohne
+  Agentenzeilen.
+- M4: `launch` (wie `attach`, Stopp beendet das Programm), `terminate`,
+  `disconnect` mit `terminateDebuggee`, Ereignisse `exited`/`terminated`
+  beim Programmende.
+- M4: Sublime-Plugin `launch`: startet `lua ljdap.lua --port … skript.lua`
+  selbst (freier Port, `program`, `args`, `cwd`, `lua`, `env`, `ljdap`),
+  Programmausgabe in der Debugger-Konsole; `ljdap.lua` liegt im Paket.
 - M3: Coroutinen als DAP-Threads (`ljdap.threads`): Hüllen um
   `coroutine.create/wrap/resume`, Haltepunkte und Stepping in Coroutinen,
   Stack und Variablen auch pausierter Coroutinen, Step über `yield`/`resume`

@@ -1,6 +1,7 @@
 -- ljdap – DAP-Server in reinem Lua für LuaJIT 2.1 und Lua 5.1.
 --
 -- Einbindung:
+--   luajit ljdap.lua [optionen] skript.lua      Starter-Modus (Editor-launch)
 --   luajit -l ljdap skript.lua                  startet mit Vorgaben bzw. LJDAP
 --   LJDAP="port=4711,wait=1" luajit -l ljdap skript.lua
 --   local dbg = require("ljdap"); dbg.start{ port = 4711, wait = true }
@@ -63,12 +64,83 @@ local function takeover(opt)
   require("ljdap.errors").run_script(arg[0], args, progname)
 end
 
-local env = os.getenv("LJDAP")
-local dash_l = loaded_by_dash_l()
-if env or dash_l then
-  local opt = session.parse_env(env)
+------------------------------------------------------------------------
+-- Starter-Modus: lua ljdap.lua [optionen] skript.lua [args…]
+------------------------------------------------------------------------
+
+local USAGE = [[
+Aufruf: luajit ljdap.lua [optionen] skript.lua [argumente…]
+  --port N      TCP-Port (Vorgabe 4711)
+  --host ADR    IPv4-Adresse (Vorgabe 127.0.0.1)
+  --nowait      nicht auf den Editor warten (Vorgabe: warten bis configurationDone)
+  --jit off     JIT ausschalten
+  --log DATEI   DAP-Mitschnitt
+  --version     Version ausgeben
+  --help        diese Hilfe
+Startet das Skript unter dem Debugger; der Editor verbindet sich per
+attach oder launch (der Sublime-/VS-Code-Adapter ruft dies selbst auf).]]
+
+-- Wird diese Datei als Skript ausgeführt (nicht per require/-l)? Dann ist
+-- das erste Vararg ein Kommandozeilenargument statt des Modulnamens.
+local function run_starter(...)
+  local argv = { ... }
+  local opt = { wait = true }
+  local i = 1
+  while argv[i] do
+    local a = argv[i]
+    if a == "--port" then i = i + 1; opt.port = tonumber(argv[i])
+    elseif a == "--host" then i = i + 1; opt.host = argv[i]
+    elseif a == "--nowait" then opt.wait = false
+    elseif a == "--wait" then opt.wait = true
+    elseif a == "--jit" then i = i + 1; opt.jit = argv[i]
+    elseif a == "--log" then i = i + 1; opt.log = argv[i]
+    elseif a == "--version" then io.stdout:write("ljdap ", M.VERSION, "\n"); os.exit(0)
+    elseif a == "--help" or a == "-h" then io.stdout:write(USAGE, "\n"); os.exit(0)
+    elseif a == "--" then i = i + 1; break
+    elseif a:sub(1, 2) == "--" then
+      io.stderr:write("ljdap: unbekannte Option ", a, "\n", USAGE, "\n"); os.exit(2)
+    else break end
+    i = i + 1
+  end
+  local script = argv[i]
+  if not script then
+    io.stderr:write("ljdap: kein Skript angegeben\n", USAGE, "\n")
+    os.exit(2)
+  end
+  -- arg wie lua.c/luajit.c es dem Skript gäbe: arg[0] = Skript, davor
+  -- Interpreter, ljdap.lua und Optionen. Ausdrücklich _G.arg: in einer
+  -- Vararg-Funktion ist `arg` unter Lua 5.1 die implizite lokale Tabelle
+  -- der Varargs (LUA_COMPAT_VARARG).
+  local old = type(_G.arg) == "table" and _G.arg or {}
+  local newarg, args = {}, { n = 0 }
+  local lowest = 0
+  while old[lowest - 1] ~= nil do lowest = lowest - 1 end
+  local shift = i -- Skript steht bei argv[i] = old[i]
+  for k = lowest, #argv do newarg[k - shift] = old[k] end
+  for k = i + 1, #argv do args.n = args.n + 1; args[args.n] = argv[k] end
+  _G.arg = newarg
+  package.loaded["ljdap"] = M
   M.start(opt)
-  if dash_l then takeover(opt) end
+  require("ljdap.errors").run_script(script, args, old[lowest] or "lua")
+end
+
+-- Unterscheidung über das erste Vararg: require und -l übergeben den
+-- Modulnamen "ljdap"; als Skript gestartet ist es ein Kommandozeilenargument
+-- (die Stack-Prüfung von loaded_by_dash_l sieht in beiden Fällen C).
+local modname = ...
+local starter = modname ~= "ljdap" and type(_G.arg) == "table" and type(_G.arg[0]) == "string"
+  and _G.arg[0]:match("ljdap%.lua$") ~= nil
+
+if starter then
+  run_starter(...)
+else
+  local env = os.getenv("LJDAP")
+  local dash_l = modname == "ljdap" and loaded_by_dash_l()
+  if env or dash_l then
+    local opt = session.parse_env(env)
+    M.start(opt)
+    if dash_l then takeover(opt) end
+  end
 end
 
 return M
