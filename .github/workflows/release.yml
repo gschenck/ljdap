@@ -1,0 +1,51 @@
+name: release
+
+# Release bei Tag v<version> (z. B. v0.1.0), von GS mit tools/push_tags.cmd
+# geschoben. Manuell startbar (workflow_dispatch) als Probelauf ohne
+# Veröffentlichung.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Werkzeuge installieren
+        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 lua-socket zip
+      - name: Version bestimmen und prüfen
+        id: v
+        run: |
+          V=$(sed -n 's/^return "\(.*\)".*/\1/p' src/ljdap/version.lua)
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            [ "${GITHUB_REF_NAME}" = "v$V" ] || { echo "::error::Tag ${GITHUB_REF_NAME} passt nicht zu version.lua ($V)"; exit 1; }
+            case "$V" in *-dev*) echo "::error::Release mit -dev-Version ($V)"; exit 1;; esac
+          fi
+      - name: Tests
+        run: |
+          sh tests/run.sh luajit lua5.1
+          python3 -m unittest discover -s tests/editors
+          LJDAP_SINGLE=1 python3 -m unittest discover -s tests/scenarios
+      - name: Dateien bauen
+        run: sh tools/build_release.sh
+      - name: Release-Notizen aus CHANGELOG.md
+        run: python3 tools/release_notes.py "${{ steps.v.outputs.version }}" > dist/NOTES.md
+      - name: Release veröffentlichen
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            dist/ljdap.lua dist/ljdap-sublime-*.zip dist/ljdap.sublime-package dist/SHA256SUMS \
+            --title "ljdap ${{ steps.v.outputs.version }}" --notes-file dist/NOTES.md
+      - name: Probelauf – Ergebnis melden
+        if: github.ref_type != 'tag'
+        run: echo "::notice title=Release-Probelauf ${{ steps.v.outputs.version }}::$(cd dist && ls | tr '\n' ' ')"

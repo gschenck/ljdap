@@ -37,6 +37,14 @@ case("getcwd", function()
   if f then f:close() end
 end)
 
+case("getcwd ignoriert veraltetes PWD", function()
+  -- Ohne FFI (Lua 5.1) darf $PWD nicht verwendet werden; mit FFI ohnehin nicht.
+  local d = paths.getcwd()
+  local f = io.open(paths.absolute("tests/unit/paths_test.lua", d), "rb")
+  check(f ~= nil, "cwd stimmt (PWD war im Test ggf. falsch gesetzt): " .. tostring(d))
+  if f then f:close() end
+end)
+
 case("mapper ohne Zuordnung", function()
   local m = paths.mapper("/home/gs/p")
   local s = m:from_source("@tests/x.lua")

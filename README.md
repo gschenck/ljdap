@@ -16,11 +16,12 @@ into the debuggee. No Node, no C module, no LuaSocket required.*
 
 ## Einbindung
 
-Während der Entwicklung liegen die Module unter `src/`; das
-Ein-Datei-Release `ljdap.lua` folgt mit M4.
+Am einfachsten mit der Ein-Datei-Version `ljdap.lua` (im Repo-Wurzel-
+verzeichnis bzw. als Download unter *Releases*): neben das Skript legen oder
+in einen Ordner auf dem `LUA_PATH`. Alternativ die Module unter `src/`:
 
 ```sh
-# Modulpfad (bis M4)
+# nur für die Module unter src/ nötig
 export LUA_PATH="/pfad/zu/ljdap/src/?.lua;/pfad/zu/ljdap/src/?/init.lua;;"
 
 luajit -l ljdap skript.lua args…                  # Vorgaben: 127.0.0.1:4711, wait=0
@@ -71,8 +72,12 @@ Unter Lua 5.1 gibt es diese Einschränkung nicht.
 
 1. Paket **Debugger** (daveleroy) über Package Control installieren
    (Sublime Text ≥ Build 4199).
-2. Den Ordner `editors/sublime/` als `Packages/ljdap/` kopieren
-   (*Preferences → Browse Packages…*). Die Datei `.python-version` (`3.8`)
+2. Plugin installieren, eine der beiden Formen:
+   - `ljdap.sublime-package` aus den *Releases* nach `Installed Packages/`
+     legen (*Preferences → Browse Packages…*, dann eine Ebene höher), oder
+   - den Ordner `editors/sublime/` (bzw. `ljdap/` aus
+     `ljdap-sublime-<version>.zip`) als `Packages/ljdap/` kopieren.
+    Die Datei `.python-version` (`3.8`)
    gehört dazu: Plugin und Debugger-Paket müssen im selben Plugin-Host
    laufen (ab Build 4200 ist das Python 3.14, das `3.8` übernimmt).
 3. Im `.sublime-project` eine Konfiguration anlegen (Vorlage:
@@ -120,8 +125,10 @@ Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
 
 ## Entwicklung
 
-- Module in `src/ljdap/`; Ein-Datei-Release `ljdap.lua` (M4) wird von
-  `tools/amalgamate.lua` erzeugt.
+- Module in `src/ljdap/`; die eingecheckte Ein-Datei-Version `ljdap.lua`
+  wird nur von `luajit tools/amalgamate.lua` erzeugt (nicht von Hand
+  ändern); die CI prüft mit `--check`, dass sie aktuell ist. Szenarien gegen
+  die Ein-Datei-Version: `LJDAP_SINGLE=1`.
 - Unit-Tests: `sh tests/run.sh` (luajit und lua5.1).
 - Sublime-Plugin: `python3 -m unittest discover -s tests/editors -v`
   (mit `SUBLIME_DEBUGGER_SRC=<Klon von SublimeDebugger>` zusätzlich Prüfung
@@ -136,6 +143,18 @@ Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
 - CI: Linux (luajit, lua5.1), Windows-LuaJIT (MinGW) unter Wine und auf
   einem echten Windows-Runner.
 - Änderungen: [CHANGELOG.md](CHANGELOG.md), Versionierung nach SemVer.
+
+## Release
+
+1. Version in `src/ljdap/version.lua` und `editors/sublime/ljdap_adapter.py`
+   (`VERSION`) setzen, im CHANGELOG `[Unreleased]` in `[x.y.z] – Datum`
+   umbenennen, `luajit tools/amalgamate.lua`, Commit auf `main`.
+2. Tag setzen und schieben (Büro-PC): `git tag vx.y.z` und `tools\push_tags.cmd`.
+3. Der Workflow `release` prüft Tag ↔ Version, testet, baut mit
+   `tools/build_release.sh` und veröffentlicht das Release mit `ljdap.lua`,
+   `ljdap-sublime-x.y.z.zip`, `ljdap.sublime-package`, `SHA256SUMS`; Text
+   aus dem CHANGELOG-Abschnitt. Ohne Tag (manuell gestartet) ist es ein
+   Probelauf ohne Veröffentlichung.
 
 ## Lizenz
 

@@ -109,6 +109,7 @@ class M2(unittest.TestCase):
                         for f in frames:
                             path = f.get("source", {}).get("path", "").replace("\\", "/")
                             self.assertNotIn("/src/ljdap/", path, "keine Agentenrahmen im Stack")
+                            self.assertFalse(path.endswith("/ljdap.lua"), "keine Agentenrahmen im Stack")
                         sc = s.scopes()
                         self.assertEqual(list(sc), ["Lokal", "Upvalues", "Global"])
                         self.assertTrue(sc["Global"]["expensive"])
@@ -320,6 +321,52 @@ class M2(unittest.TestCase):
                 s.finish()
             finally:
                 s.close()
+        self.run_each(body)
+
+    def test_single_file_next_to_script(self):
+        # ljdap.lua im selben Verzeichnis wie das Skript: Haltepunkte und
+        # Stepping im Skript dürfen nicht als Agentencode übersprungen werden.
+        import shutil
+        import subprocess
+        import tempfile
+        from harness import ROOT, DapClient, free_port, is_wine
+        def body(interp):
+            if is_wine(interp):
+                self.skipTest("Pfadzuordnung für Temp-Verzeichnis unter Wine nicht nötig")
+            d = tempfile.mkdtemp(prefix="ljdap-single-")
+            try:
+                shutil.copy(os.path.join(ROOT, "ljdap.lua"), d)
+                shutil.copy(STEPS, d)
+                script = os.path.join(d, "steps.lua")
+                port = free_port()
+                env = dict(os.environ, LJDAP=f"port={port},wait=1")
+                p = subprocess.Popen(interp.split() + ["-e", "package.path='./?.lua;'..package.path",
+                                                       "-l", "ljdap", "steps.lua"],
+                                     cwd=d, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                c = DapClient.connect("127.0.0.1", port)
+                try:
+                    c.request("initialize", {"adapterID": "ljdap"})
+                    c.request("attach", {"stopOnEntry": True})
+                    r = c.request("setBreakpoints", {"source": {"path": script}, "breakpoints": [{"line": 13}]})
+                    self.assertTrue(r["body"]["breakpoints"][0]["verified"])
+                    c.request("configurationDone")
+                    self.assertEqual(c.event("stopped")["body"]["reason"], "entry")
+                    f = c.request("stackTrace", {"threadId": 1})["body"]["stackFrames"][0]
+                    self.assertEqual((f["name"], f["line"], os.path.realpath(f["source"]["path"])),
+                                     ("Hauptchunk", 4, os.path.realpath(script)))
+                    c.request("continue", {"threadId": 1})
+                    self.assertEqual(c.event("stopped")["body"]["reason"], "breakpoint")
+                    c.request("continue", {"threadId": 1})
+                    out, err = p.communicate(timeout=30)
+                    self.assertEqual(p.returncode, 0, err)
+                    self.assertIn(b"steps: 16 Punkt 42", out)
+                finally:
+                    c.close()
+                    if p.poll() is None:
+                        p.kill()
+                        p.communicate()
+            finally:
+                shutil.rmtree(d, ignore_errors=True)
         self.run_each(body)
 
 

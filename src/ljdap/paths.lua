@@ -59,8 +59,10 @@ function M.getcwd()
     local ok, d = pcall(getcwd_ffi)
     if ok and d and d ~= "" then return d end
   end
-  local d = os.getenv("PWD")
-  if d and d ~= "" and not windows then return d end
+  -- Nicht $PWD: das bleibt veraltet, wenn ein Elternprozess das Verzeichnis
+  -- wechselt, ohne PWD anzupassen (Python-subprocess, Editoren, Dienste).
+  -- Ohne FFI daher einmal beim Start die Shell fragen.
+  local d
   local p = io.popen(windows and "cd" or "pwd")
   if p then
     d = p:read("*l")

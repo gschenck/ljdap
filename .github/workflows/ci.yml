@@ -17,9 +17,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Interpreter installieren
         run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 lua-socket
+      - name: Ein-Datei-Version ljdap.lua aktuell?
+        run: luajit tools/amalgamate.lua --check
       - name: Unit-Tests (luajit, lua5.1)
         run: sh tests/run.sh luajit lua5.1
       - name: Szenarien (luajit, lua5.1)
+        run: python3 -m unittest discover -s tests/scenarios -v
+      - name: Szenarien gegen die Ein-Datei-Version
+        env:
+          LJDAP_SINGLE: "1"
         run: python3 -m unittest discover -s tests/scenarios -v
       - name: Sublime-Plugin (inkl. API-Prüfung gegen aktuelles Debugger-Paket)
         run: |
@@ -92,7 +98,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Interpreter und Xvfb installieren
-        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 lua-socket xvfb imagemagick
+        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 lua-socket xvfb imagemagick zip
       - name: Sublime Text installieren (apt-Repository von sublimetext.com)
         run: |
           sudo install -d -m 0755 /etc/apt/keyrings
@@ -102,8 +108,11 @@ jobs:
           /opt/sublime_text/sublime_text --version
       - name: Paket Debugger holen
         run: git clone -q --depth 1 https://github.com/daveleroy/SublimeDebugger.git /tmp/SublimeDebugger
+      - name: Release-Dateien bauen (getestet wird das gebaute Paket)
+        run: sh tools/build_release.sh
       - name: Ende-zu-Ende-Test
         env:
+          LJDAP_E2E_PACKAGE: ${{ github.workspace }}/dist/ljdap.sublime-package
           SUBLIME_TEXT: /opt/sublime_text/sublime_text
           SUBLIME_DEBUGGER_SRC: /tmp/SublimeDebugger
           LJDAP_E2E_OUT: ${{ github.workspace }}/e2e-out

@@ -10,7 +10,12 @@ from dap_client import DapClient, DapError, free_port  # noqa: E402,F401
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 INTERPS = [s.strip() for s in os.environ.get("LJDAP_INTERPS", "luajit;lua5.1").split(";") if s.strip()]
-DEV_PATH = "package.path='src/?.lua;src/?/init.lua;'..package.path"
+# LJDAP_SINGLE=1: gegen die Ein-Datei-Version ljdap.lua im Wurzelverzeichnis
+# testen statt gegen die Module in src/
+if os.environ.get("LJDAP_SINGLE"):
+    DEV_PATH = "package.path='./?.lua;'..package.path"
+else:
+    DEV_PATH = "package.path='src/?.lua;src/?/init.lua;'..package.path"
 DEBUG = os.environ.get("LJDAP_TEST_LOG")
 
 

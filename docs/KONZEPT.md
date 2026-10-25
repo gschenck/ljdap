@@ -91,6 +91,12 @@ ljdap/
 ```
 Regel: Entwicklung in `src/`, das eingecheckte `ljdap.lua` wird nur durch
 `tools/amalgamate.lua` erzeugt; die CI prüft, dass es aktuell ist.
+**Umgesetzt nach M2 (vorgezogen):** Module als `package.preload`, `init.lua`
+als Hauptchunk (gleiche Stack-Ebenen für die `-l`-Erkennung). Agentencode
+wird in der Ein-Datei-Version an genau dieser Datei erkannt, nicht am
+Verzeichnis. Releases über den Workflow `release` bei Tag `v*`
+(Dateien: `ljdap.lua`, `ljdap-sublime-<v>.zip`, `ljdap.sublime-package`,
+`SHA256SUMS`); kein „nightly“ (Entscheidung GS).
 
 ## 5 Transport
 

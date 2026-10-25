@@ -9,6 +9,14 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
 ## [Unreleased]
 
 ### Hinzugefügt
+- Ein-Datei-Version `ljdap.lua` (vorgezogen aus M4): `tools/amalgamate.lua`
+  erzeugt sie aus `src/ljdap/`, `--check` in der CI; Szenarien laufen auch
+  gegen die Ein-Datei-Version (`LJDAP_SINGLE=1`).
+- Releases: Workflow `release` bei Tag `v*` veröffentlicht `ljdap.lua`,
+  `ljdap-sublime-<version>.zip`, `ljdap.sublime-package` und `SHA256SUMS`
+  (`tools/build_release.sh`, Notizen aus dem CHANGELOG per
+  `tools/release_notes.py`); der Sublime-Ende-zu-Ende-Test in der CI prüft
+  das gebaute Paket.
 - M2: Haltepunkte (`ljdap.breakpoints`): Datei wird beim Setzen übersetzt
   (nicht ausgeführt), gültige Zeilen aller Funktionen über `jit.util` bzw.
   `string.dump` (`ljdap.lines`); Haltepunkte auf Kommentar-/Leerzeilen
@@ -51,3 +59,11 @@ und dieses Projekt hält sich an [Semantic Versioning](https://semver.org/lang/d
   VS Code und lua-debug (M0).
 - Repo-Gerüst: README, MIT-Lizenz, Changelog, CI-Grundgerüst,
   Test-Runner `tests/run.sh`, `tools/push_tags.cmd`.
+
+### Behoben
+- Agentencode wurde am Verzeichnis erkannt: Mit der Ein-Datei-Version
+  wären Haltepunkte in Skripten neben `ljdap.lua` übergangen worden; jetzt
+  zählt genau die Datei.
+- Ohne FFI (Lua 5.1) wurde das Arbeitsverzeichnis aus `$PWD` gelesen, das
+  nach einem Verzeichniswechsel durch den Elternprozess veraltet sein kann
+  (falsche Quellpfade); jetzt einmal per `pwd`/`cd`.

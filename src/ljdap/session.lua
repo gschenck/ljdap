@@ -50,15 +50,26 @@ local DEFAULTS = {
 
 local MAX_FRAMES = 1000
 
--- Quellen des Agenten selbst: beim Steppen überspringen. Unter Windows
--- erzeugt require gemischte Trenner ("src/ljdap\\session.lua", aber
--- "src/ljdap/init.lua"), daher mit vereinheitlichten Trennern vergleichen.
-local AGENT_PREFIX = (getinfo(1, "S").source:gsub("\\", "/"):match("^(@.*/)")) or "@\0"
-local agent_cache = setmetatable({}, { __mode = "k" })
+-- Quellen des Agenten selbst: beim Steppen überspringen.
+--   Module (src/ljdap/*.lua): alles unter dem Verzeichnis ljdap/. Unter
+--     Windows erzeugt require gemischte Trenner ("src/ljdap\\session.lua",
+--     aber "src/ljdap/init.lua"), daher mit vereinheitlichten Trennern.
+--   Ein-Datei-Version (ljdap.lua): genau diese Datei – nicht ihr
+--     Verzeichnis, dort liegen oft die Skripte des Benutzers.
+local SELF = getinfo(1, "S").source:gsub("\\", "/")
+local AGENT_PREFIX, AGENT_EXACT
+if SELF:match("/ljdap/[^/]+%.lua$") or SELF:match("^@ljdap/[^/]+%.lua$") then
+  AGENT_PREFIX = SELF:match("^(@.*/)")
+else
+  AGENT_EXACT = SELF
+end
+local agent_cache = {}
 local function is_agent(source)
   local r = agent_cache[source]
   if r == nil then
-    r = source:gsub("\\", "/"):sub(1, #AGENT_PREFIX) == AGENT_PREFIX
+    local s = source:gsub("\\", "/")
+    if AGENT_EXACT then r = s == AGENT_EXACT
+    else r = s:sub(1, #AGENT_PREFIX) == AGENT_PREFIX end
     agent_cache[source] = r
   end
   return r

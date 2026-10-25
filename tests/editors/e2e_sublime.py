@@ -11,6 +11,8 @@ Aufruf aus dem Repo-Wurzelverzeichnis:
     SUBLIME_TEXT=/pfad/sublime_text/sublime_text \\
     SUBLIME_DEBUGGER_SRC=/pfad/SublimeDebugger \\
     python3 tests/editors/e2e_sublime.py [interp]
+Mit LJDAP_E2E_PACKAGE=dist/ljdap.sublime-package wird statt des Ordners das
+gebaute Paket unter „Installed Packages“ installiert.
 Ohne SUBLIME_TEXT wird der Test übersprungen (Rückgabe 0).
 """
 
@@ -43,7 +45,14 @@ class Sublime:
         os.makedirs(os.path.join(pk, "User"))
         shutil.copytree(debugger_src, os.path.join(pk, "Debugger"),
                         ignore=shutil.ignore_patterns(".git"))
-        shutil.copytree(os.path.join(ROOT, "editors", "sublime"), os.path.join(pk, "ljdap"))
+        package = os.environ.get("LJDAP_E2E_PACKAGE")
+        if package:
+            # gebautes Release-Paket statt des Ordners (tools/build_release.sh)
+            inst = os.path.join(os.path.dirname(pk), "Installed Packages")
+            os.makedirs(inst)
+            shutil.copy(package, os.path.join(inst, "ljdap.sublime-package"))
+        else:
+            shutil.copytree(os.path.join(ROOT, "editors", "sublime"), os.path.join(pk, "ljdap"))
         shutil.copytree(os.path.join(HERE, "sublime_e2e"), os.path.join(pk, "ljdap_e2e"))
         with open(os.path.join(pk, "User", "Preferences.sublime-settings"), "w") as f:
             json.dump({"update_check": False, "hot_exit": "disabled",
