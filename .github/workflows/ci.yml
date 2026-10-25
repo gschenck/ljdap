@@ -108,6 +108,9 @@ jobs:
           SUBLIME_DEBUGGER_SRC: /tmp/SublimeDebugger
           LJDAP_E2E_OUT: ${{ github.workspace }}/e2e-out
         run: python3 tests/editors/e2e_sublime.py luajit lua5.1
+      - name: Fehler als Annotationen melden (über die API lesbar)
+        if: failure()
+        run: python3 tests/editors/annotate.py e2e-out
       - uses: actions/upload-artifact@v4
         if: always()
         with:
