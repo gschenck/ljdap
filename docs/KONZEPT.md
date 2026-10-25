@@ -145,6 +145,10 @@ Verzeichnis. Releases über den Workflow `release` bei Tag `v*`
 - **Agentencode beim Steppen überspringen:** Quellen unter dem Verzeichnis
   von `ljdap/` (mit vereinheitlichten Trennern; `require` erzeugt unter
   Windows gemischte Trenner).
+  **Korrigiert (M4):** Modulform nur, wenn die eigene Quelle auf
+  `…/session.lua` endet (dann gilt das Verzeichnis `ljdap/`); sonst
+  (Ein-Datei-Version) genau die Datei. Vorher machte ein Projektordner
+  namens `ljdap` mit `…/ljdap/ljdap.lua` das ganze Projekt zum Agenten.
 - **Pause und Socket-Abfrage:** Count-Hook alle N Anweisungen (z. B. 10 000,
   einstellbar) prüft nicht blockierend den Socket. Pause setzt
   „bei nächster Zeile halten“. Zu prüfen: Count-Hook unter JIT (läuft nicht
@@ -263,7 +267,16 @@ Platzhalter `json.null`, damit die Indizes stimmen.
 
 ## 10 Frontends
 
-- **VS Code:** `"debugServer": <port>` in launch.json wirkt nur für einen
+- **VS Code, umgesetzt (M4):** Erweiterung `editors/vscode/` (Typ `ljdap`,
+  ohne Abhängigkeiten): `attach` → `DebugAdapterServer(port, host)`;
+  `launch` → freier Port, Kindprozess `lua ljdap.lua --port P skript.lua`
+  (Starter-Modus), warten bis der Port antwortet (Abbruch mit Meldung,
+  wenn der Prozess vorher endet), Ausgabe in die Debug-Konsole, Prozess
+  beim Sitzungsende beenden. `ljdap.lua` wird beim Paketieren in die
+  `.vsix` gelegt. Tests: Node mit nachgebildetem `vscode`-Modul, Ende-zu-Ende
+  mit `@vscode/test-electron` in der CI (lokal nicht möglich, Download
+  gesperrt).
+  Ursprünglicher Plan: `"debugServer": <port>` in launch.json wirkt nur für einen
   Debug-Typ, den eine Erweiterung registriert (Annahme, in M1 mit echtem
   VS Code prüfen). Daher kleine Erweiterung in `editors/vscode/`:
   `package.json` (contributes.debuggers, Typ `ljdap`, Schema für
@@ -317,7 +330,7 @@ Platzhalter `json.null`, damit die Indizes stimmen.
 | M1 | json, transport (POSIX+Windows), protocol; initialize/attach/disconnect; Client-Test | VS Code oder Python-Client verbindet sich |
 | M2 | hooks, breakpoints, Stepping, stackTrace/scopes/variables (ohne Coroutinen) | Haltepunkt + Steps in Sublime unter Windows |
 | M3 | Coroutinen, evaluate/setVariable, Fehler-Halt, Logpoints/Bedingungen, Pause | Szenarien grün Linux + Wine |
-| M4 | amalgamate → ljdap.lua, Sublime-Einrichtung, README, Leistungsmessung, Release v0.1.0 | GS debuggt ein FemConn-/F7Cmdr-Skript |
+| M4 | amalgamate → ljdap.lua, Starter-Modus/launch, Sublime- und VS-Code-Einrichtung, README, Leistungsmessung, Release v0.1.0 | GS debuggt ein FemConn-/F7Cmdr-Skript |
 | M5 | (optional) F7Cmdr-Anbindung „Mit Debugger starten“ | – |
 
 ## 13 Risiken und offene Punkte
@@ -328,7 +341,8 @@ Platzhalter `json.null`, damit die Indizes stimmen.
   Versionen verschoben hat. Gegenmittel: Import mit Rückfallpfaden, Test der
   Importpfade gegen den aktuellen Stand des Pakets in der CI, mittelfristig
   Adapter upstream beitragen (15.1).
-- VS Code: `debugServer` ohne eigene Erweiterung nicht nutzbar (Annahme, M1).
+- ~~VS Code: `debugServer` ohne eigene Erweiterung nicht nutzbar~~ –
+  erledigt durch die Erweiterung (M4).
 - ~~Sandbox ohne Wine und MinGW~~ – in M1 installiert, Szenarien laufen
   unter Wine.
 - Count-Hook/Pause unter JIT ohne verbundenen Client (6) – gemessen M1,
@@ -443,3 +457,30 @@ class Ljdap(dap.Adapter):
 - Übernommen: null-Toleranz (7), kein `sourceContent` (7),
   `coroutine.resume`-Umhüllung für spät erfasste Coroutinen (6),
   eigener Agentenzustand als Idee (13).
+
+## 16 Befunde M4 (2026-10-25)
+
+- **Starter-Modus** `lua ljdap.lua [opts] skript.lua args…`: Erkennung über
+  das erste Vararg des Hauptchunks (`require`/`-l` übergeben `"ljdap"`, als
+  Skript ein Kommandozeilenargument); die Stack-Prüfung sieht in beiden
+  Fällen einen C-Rahmen und taugt nicht. `arg` wird wie bei lua.c/luajit.c
+  umgebaut; unter Lua 5.1 ausdrücklich `_G.arg`, weil `arg` in einer
+  Vararg-Funktion die implizite lokale Vararg-Tabelle ist.
+- Das Skript läuft unter `xpcall` (`errors.run_script`): „nicht
+  abgefangen“ hält damit in beiden Interpretern am Fehlerort. Der
+  Traceback auf stderr wird um Agenten-, `[C]`- und `(tail call)`-Zeilen am
+  Ende gekürzt; der Handler ruft `debug.traceback(msg, 2)` ohne Tail Call
+  (sonst verschiebt LuaJIT die Ebenen).
+- `launch` = `attach` mit Merker; `disconnect` beendet das Programm
+  (`terminateDebuggee` ≠ false), `terminate` ebenso; bei Programmende
+  `exited` (Rückgabewert) und `terminated`.
+- Aufrufliste: `(tail call)`- und C-Rahmen am unteren Ende (Starter,
+  `xpcall`) werden ausgeblendet.
+- Leistung erneut gemessen (2026-10-25): verbunden ohne Haltepunkt 1,66×
+  (LuaJIT, kurzer Lauf, streut) bzw. 1,62× (Lua 5.1); mit Haltepunkt 17,4×
+  bzw. 10,6×.
+- Release enthält zusätzlich `ljdap-vscode-<v>.vsix` (`vsce package
+  --no-dependencies`); die Versionsnummer in `package.json` ist die von
+  `version.lua` ohne `-dev` (Annahme, ungeprüft: der Marketplace nimmt keine SemVer-Vorabkennung an; gilt für die
+  `.vsix` sinngemäß), ein Test prüft das.
+

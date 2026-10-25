@@ -138,12 +138,18 @@ jobs:
         with:
           node-version: 22
       - name: Interpreter und Xvfb installieren
-        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 xvfb zip libasound2t64 libgbm1 libgtk-3-0 libnss3 libxss1
+        run: sudo apt-get update && sudo apt-get install -y luajit lua5.1 lua-socket xvfb zip libasound2t64 libgbm1 libgtk-3-0 libnss3 libxss1
       - name: Node-Tests (luajit, lua5.1)
         working-directory: editors/vscode
         run: |
-          LJDAP_TEST_LUA=luajit npm test
-          LJDAP_TEST_LUA=lua5.1 npm test
+          for L in luajit lua5.1; do
+            LJDAP_TEST_LUA=$L npm test > node-$L.log 2>&1 && continue
+            cat node-$L.log
+            # Logs sind über die API nicht lesbar: Fehlerstellen als Annotation
+            msg=$(grep -n -A25 '^not ok\|^ *not ok' node-$L.log | head -n 60 | cut -c1-200 | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')
+            echo "::error title=Node-Tests $L::$msg"
+            exit 1
+          done
       - name: Ende-zu-Ende mit VS Code
         working-directory: editors/vscode
         run: |

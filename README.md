@@ -7,14 +7,35 @@ einem beliebigen DAP-Client (Sublime Text mit Paket „Debugger“, VS Code).
 *A pure-Lua Debug Adapter Protocol server for LuaJIT 2.1 / Lua 5.1, loaded
 into the debuggee. No Node, no C module, no LuaSocket required.*
 
-> **Stand: M3 (0.1.0-dev).** Haltepunkte (Verschiebung von Kommentar- und
+> **Stand: M4 (0.1.0-dev).** Starter-Modus und `launch` aus Sublime Text
+> und VS Code, Haltepunkte (Verschiebung von Kommentar- und
 > Leerzeilen, Bedingungen, Trefferzähler, Logpoints), Step over/in/out auch
 > über Coroutine-Grenzen, Pause, Stack und Variablen aller Coroutinen,
 > Werte ändern und Ausdrücke auswerten (Watch, Hover, Konsole), Halt bei
 > Fehlern (nicht abgefangen / alle), `ljdap.breakhere()`, `stopOnEntry`,
 > `pathMappings`; Linux und Windows. Plan: [docs/KONZEPT.md](docs/KONZEPT.md).
 
-## Einbindung
+## Schnellstart
+
+Aus dem Editor: Plugin für [Sublime Text](#sublime-text-paket-debugger)
+oder [VS Code](#vs-code) installieren, Konfiguration mit
+`"request": "launch"` und `"program": "${file}"` anlegen, Debuggen starten.
+Der Editor ruft dann selbst den **Starter-Modus** auf:
+
+```sh
+luajit ljdap.lua [--port 4711] [--host 127.0.0.1] [--nowait] [--jit off] [--log datei] skript.lua args…
+lua5.1 ljdap.lua --version
+```
+
+Das Skript bekommt `arg` und `...` wie beim Interpreter, läuft unter
+`xpcall` (Halt bei nicht abgefangenen Fehlern in beiden Interpretern) und
+wartet bis `configurationDone`. Endet das Skript, meldet ljdap `exited`
+mit dem Rückgabewert; „Stop“ im Editor beendet das Programm.
+
+Für Programme, die anders gestartet werden (Hauptprogramm mit eigener
+Umgebung, Server, TUI): ljdap einbinden und mit `attach` verbinden.
+
+## Einbindung (attach)
 
 Am einfachsten mit der Ein-Datei-Version `ljdap.lua` (im Repo-Wurzel-
 verzeichnis bzw. als Download unter *Releases*): neben das Skript legen oder
@@ -87,29 +108,62 @@ Unter Lua 5.1 gibt es diese Einschränkung nicht.
 
 ```json
 "debugger_configurations": [
+  { "name": "Skript", "type": "ljdap", "request": "launch",
+    "program": "${file}", "lua": "luajit" },
   { "name": "ljdap", "type": "ljdap", "request": "attach",
     "host": "127.0.0.1", "port": 4711 }
 ]
 ```
 
-4. Programm starten, z. B. `LJDAP="port=4711,wait=1" luajit -l ljdap skript.lua`
+4. `launch`: *Debugger: Start* startet das Skript selbst; Ausgabe in der
+   Debugger-Konsole. Weitere Felder: `args`, `cwd`, `env`, `lua`
+   (Interpreter oder Pfad), `port` (Vorgabe frei gewählt), `ljdap`
+   (eigener Pfad zu `ljdap.lua`, Vorgabe aus dem Paket), `stopOnEntry`.
+5. `attach`: Programm starten, z. B. `LJDAP="port=4711,wait=1" luajit -l ljdap skript.lua`
    (Windows: `set LJDAP=port=4711,wait=1`), dann in Sublime *Debugger: Start*.
 
 Weitere `attach`-Felder: `stopOnEntry` (mit `wait=1` an der ersten Zeile
 anhalten), `pathMappings` (`[{ "localRoot": "C:\\Projekte\\x", "remoteRoot": "/home/gs/x" }]`,
 wenn Programm und Editor verschiedene Pfade sehen), `timeout`.
 
-## VS Code (geplant)
+## VS Code
 
-Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
+1. `ljdap-vscode-<version>.vsix` aus den *Releases* installieren
+   (*Erweiterungen → … → Aus VSIX installieren*, oder
+   `code --install-extension ljdap-vscode-<version>.vsix`).
+2. `.vscode/launch.json`:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    { "type": "ljdap", "request": "launch", "name": "Lua-Skript",
+      "program": "${file}", "lua": "luajit" },
+    { "type": "ljdap", "request": "attach", "name": "ljdap anhängen",
+      "host": "127.0.0.1", "port": 4711 }
+  ]
+}
+```
+
+Felder wie bei Sublime Text; `ljdap.lua` liegt in der Erweiterung.
+Haltepunkte in `.lua`-Dateien setzen, F5. Endet der Prozess, bevor sich
+VS Code verbinden konnte (falscher Interpreter, Syntaxfehler im Starter),
+zeigt die Erweiterung eine Meldung mit der Ausgabe.
 
 ## Grenzen
 
-- **Geschwindigkeit:** Ohne Haltepunkte kostet ein verbundener Client kaum
-  etwas (≈ 1,0–1,5× gegenüber `-joff`). Sobald irgendwo ein Haltepunkt
-  gesetzt ist oder gesteppt wird, läuft ein Zeilen-Hook: gemessen ≈ 9–10×
-  (Lua 5.1) bzw. ≈ 13–20× (LuaJIT-Interpreter) für aufrufintensiven Code
-  (`python3 tests/perf/bench.py`). Rechenlastige Programme: Haltepunkte
+- **Geschwindigkeit** (`python3 tests/perf/bench.py`, aufrufintensiver
+  Code, Faktor gegenüber dem Lauf ohne ljdap; LuaJIT bezogen auf `-joff`,
+  weil der JIT bei verbundenem Client aus ist):
+
+  | Lauf | LuaJIT 2.1 | Lua 5.1 |
+  |---|---|---|
+  | ohne ljdap, JIT an | ≈ 0,1× | – |
+  | Client verbunden, keine Haltepunkte | ≈ 1,0–1,7× | ≈ 1,0–1,6× |
+  | Haltepunkt (in anderer Datei) oder Stepping | ≈ 13–20× | ≈ 9–11× |
+
+  Sobald irgendwo ein Haltepunkt gesetzt ist, läuft ein Zeilen-Hook; das
+  kostet in reinem Lua so viel. Rechenlastige Programme: Haltepunkte
   gezielt setzen und wieder entfernen.
 - **Tail Calls** (`return f(x)`): LuaJIT ersetzt den Rahmen, „Step over“
   auf so einer Zeile hält in `f`; Lua 5.1 zeigt einen Rahmen „(tail call)“
@@ -123,7 +177,8 @@ Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
   5.1 nicht (dort gelten Hooks je Coroutine; unter LuaJIT global). Darum
   ljdap per `-l ljdap` beim Start laden.
 - **Fehler-Halt:**
-  - *Nicht abgefangen* (Standard): unter LuaJIT nur, wenn ljdap mit
+  - *Nicht abgefangen* (Standard): im Starter-Modus (`launch`) immer;
+    sonst unter LuaJIT nur, wenn ljdap mit
     `luajit … -l ljdap skript.lua` geladen wird – ljdap führt das Skript
     dann selbst unter `xpcall` aus (abschaltbar mit `LJDAP="run=0"`); mit
     `require("ljdap").start{}` aus dem Programm heraus gibt es diesen Halt
@@ -156,21 +211,27 @@ Erweiterung aus `editors/vscode/` mit Debug-Typ `ljdap` (M4).
   – setzt Haltepunkt, steppt, prüft Zustand im Debugger-Paket und den
   DAP-Mitschnitt; mit `LJDAP_E2E_OUT=<ordner>` zusätzlich Bildschirmfotos
   und Protokolle (in der CI als Artefakt `sublime-e2e`).
+- VS-Code-Erweiterung: `cd editors/vscode && npm test` (nachgebildetes
+  `vscode`-Modul, echter ljdap-Prozess; `LJDAP_TEST_LUA=lua5.1` für den
+  anderen Interpreter); Ende-zu-Ende mit echtem VS Code nur in der CI
+  (`test/e2e/run.js`, `@vscode/test-electron` unter Xvfb).
 - Szenarien mit echtem DAP-Client: `python3 -m unittest discover -s tests/scenarios -v`;
   andere Interpreter über `LJDAP_INTERPS="luajit;lua5.1;wine /pfad/luajit.exe"`.
 - CI: Linux (luajit, lua5.1), Windows-LuaJIT (MinGW) unter Wine und auf
-  einem echten Windows-Runner.
+  einem echten Windows-Runner, Sublime Text und VS Code Ende-zu-Ende.
 - Änderungen: [CHANGELOG.md](CHANGELOG.md), Versionierung nach SemVer.
 
 ## Release
 
-1. Version in `src/ljdap/version.lua` und `editors/sublime/ljdap_adapter.py`
-   (`VERSION`) setzen, im CHANGELOG `[Unreleased]` in `[x.y.z] – Datum`
+1. Version in `src/ljdap/version.lua`, `editors/sublime/ljdap_adapter.py`
+   (`VERSION`) und `editors/vscode/package.json` setzen (Tests prüfen den
+   Gleichlauf), im CHANGELOG `[Unreleased]` in `[x.y.z] – Datum`
    umbenennen, `luajit tools/amalgamate.lua`, Commit auf `main`.
 2. Tag setzen und schieben (Büro-PC): `git tag vx.y.z` und `tools\push_tags.cmd`.
 3. Der Workflow `release` prüft Tag ↔ Version, testet, baut mit
    `tools/build_release.sh` und veröffentlicht das Release mit `ljdap.lua`,
-   `ljdap-sublime-x.y.z.zip`, `ljdap.sublime-package`, `SHA256SUMS`; Text
+   `ljdap-sublime-x.y.z.zip`, `ljdap.sublime-package`,
+   `ljdap-vscode-x.y.z.vsix`, `SHA256SUMS`; Text
    aus dem CHANGELOG-Abschnitt. Ohne Tag (manuell gestartet) ist es ein
    Probelauf ohne Veröffentlichung.
 
